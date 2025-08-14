@@ -174,6 +174,59 @@ class SecurityManager {
         return (true, nil)
     }
     
+    // MARK: - Encryption (POC Compatible AES-256-GCM)
+    
+    /// POC와 동일한 AES-256-GCM 암호화
+    /// 반환 데이터: IV(12바이트) + 암호문 + 태그(16바이트)
+    func encrypt(data: Data) -> Data? {
+        guard let key = getEncryptionKey() else {
+            Logger.shared.logSecurity("암호화 키를 찾을 수 없습니다")
+            return nil
+        }
+        
+        // 12바이트 IV 생성
+        let iv = Data((0..<12).map { _ in UInt8.random(in: 0...255) })
+        
+        do {
+            let sealedBox = try AES.GCM.seal(data, using: key, nonce: AES.GCM.Nonce(data: iv))
+            // POC 형식: IV + 암호문 + 태그
+            return iv + sealedBox.ciphertext + sealedBox.tag
+        } catch {
+            Logger.shared.logSecurity("암호화 실패: \(error)")
+            return nil
+        }
+    }
+    
+    /// POC와 동일한 AES-256-GCM 복호화
+    func decrypt(data: Data) -> Data? {
+        guard data.count >= 12 + 16 else {
+            Logger.shared.logSecurity("데이터가 너무 짧습니다")
+            return nil
+        }
+        
+        guard let key = getEncryptionKey() else {
+            Logger.shared.logSecurity("복호화 키를 찾을 수 없습니다")
+            return nil
+        }
+        
+        // POC 형식 파싱: IV(12) + 암호문 + 태그(16)
+        let iv = data.prefix(12)
+        let ciphertext = data.dropFirst(12).dropLast(16)
+        let tag = data.suffix(16)
+        
+        do {
+            let sealedBox = try AES.GCM.SealedBox(
+                nonce: AES.GCM.Nonce(data: iv),
+                ciphertext: ciphertext,
+                tag: tag
+            )
+            return try AES.GCM.open(sealedBox, using: key)
+        } catch {
+            Logger.shared.logSecurity("복호화 실패: \(error)")
+            return nil
+        }
+    }
+    
     // MARK: - Rate Limiting
     
     private var lastSyncTimes: [String: Date] = [:]

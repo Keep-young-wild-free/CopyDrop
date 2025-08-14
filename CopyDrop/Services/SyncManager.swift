@@ -170,31 +170,36 @@ class SyncManager {
     }
     
     private func broadcastClipboardContent(_ content: String) {
-        let message = createClipboardMessage(content: content)
-        
-        guard let messageData = try? JSONSerialization.data(withJSONObject: message) else {
-            logger.log("메시지 시리얼라이즈 실패", level: LogLevel.error)
-            return
-        }
-        
-        // 암호화
-        guard let encryptedData = encryptMessage(messageData) else {
-            errorHandler.handle(.encryptionFailed)
-            return
-        }
-        
-        // 서버 모드: 연결된 클라이언트들에게 브로드캐스트
+        // 서버 모드: WebSocketServer의 POC 호환 브로드캐스트 사용
         if isServerRunning {
-            webSocketServer.broadcastMessage(encryptedData)
+            webSocketServer.broadcastClipboard(content)
         }
         
-        // 클라이언트 모드: 서버에게 전송
+        // 클라이언트 모드: POC 방식으로 서버에 전송
         if isClientConnected {
-            webSocketClient.sendMessage(encryptedData)
+            sendClipboardToPOCServer(content)
         }
         
         lastSyncTime = Date()
         logger.log("클립보드 내용 동기화됨: \(content.clipboardPreview)")
+    }
+    
+    /// POC 서버로 클립보드 내용 전송
+    private func sendClipboardToPOCServer(_ content: String) {
+        let deviceInfo = DeviceInfo.current()
+        let message = CopyDropMessage(content: content, deviceId: deviceInfo.id)
+        
+        do {
+            let jsonData = try JSONEncoder().encode(message)
+            guard let encryptedData = SecurityManager.shared.encrypt(data: jsonData) else {
+                errorHandler.handle(.encryptionFailed)
+                return
+            }
+            
+            webSocketClient.sendBinaryMessage(encryptedData)
+        } catch {
+            logger.log("POC 메시지 생성 실패: \(error)", level: .error)
+        }
     }
     
     private func handleReceivedMessage(_ data: Data) {

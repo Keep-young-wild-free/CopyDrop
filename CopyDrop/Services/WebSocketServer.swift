@@ -10,6 +10,7 @@ import Foundation
 import Network
 import CryptoKit
 import CommonCrypto
+import AppKit
 
 @MainActor
 @Observable
@@ -276,13 +277,11 @@ class WebSocketServer: NSObject {
             
             if let data = data, !data.isEmpty {
                 // WebSocket 프레임 파싱
-                if let message = self?.parseWebSocketFrame(data) {
-                    print("WebSocket 메시지 수신: \(message.count) bytes")
+                if let binaryData = self?.parseWebSocketFrame(data) {
+                    print("WebSocket 바이너리 메시지 수신: \(binaryData.count) bytes")
                     
-                    // 다른 클라이언트들에게 브로드캐스트
-                    DispatchQueue.main.async {
-                        self?.broadcastToOthers(message, except: client)
-                    }
+                    // POC 방식: 바이너리 데이터 복호화 및 처리
+                    self?.handlePOCMessage(binaryData, from: client)
                 }
             }
             
@@ -390,6 +389,99 @@ class WebSocketServer: NSObject {
         frame.append(data)
         
         return frame
+    }
+    
+    // MARK: - POC Compatible Message Handling
+    
+    /// POC 방식으로 바이너리 메시지 처리
+    private func handlePOCMessage(_ encryptedData: Data, from client: WebSocketConnection) {
+        // 암호화된 데이터 복호화
+        guard let decryptedData = SecurityManager.shared.decrypt(data: encryptedData) else {
+            print("메시지 복호화 실패")
+            return
+        }
+        
+        // JSON 파싱
+        do {
+            guard let json = try JSONSerialization.jsonObject(with: decryptedData) as? [String: Any],
+                  let payload = json["payload"] as? String,
+                  let hash = json["hash"] as? String,
+                  let from = json["from"] as? String,
+                  let timestamp = json["t"] as? Int64 else {
+                print("POC 메시지 형식 오류")
+                return
+            }
+            
+            print("POC 메시지 수신 - From: \(from), Hash: \(hash)")
+            
+            // 루프 방지: 같은 해시인지 확인
+            if !shouldProcessMessage(hash: hash, from: from) {
+                print("중복 메시지 무시: \(hash)")
+                return
+            }
+            
+            // 클립보드 업데이트
+            DispatchQueue.main.async { [weak self] in
+                self?.updateLocalClipboard(payload)
+                // 다른 클라이언트들에게 포워드 (원본 암호화된 데이터 그대로)
+                self?.broadcastToOthers(encryptedData, except: client)
+            }
+            
+        } catch {
+            print("JSON 파싱 오류: \(error)")
+        }
+    }
+    
+    /// 클립보드 내용을 POC 형식으로 브로드캐스트
+    func broadcastClipboard(_ content: String) {
+        let deviceInfo = DeviceInfo.current()
+        let message = CopyDropMessage(content: content, deviceId: deviceInfo.id)
+        
+        do {
+            let jsonData = try JSONEncoder().encode(message)
+            guard let encryptedData = SecurityManager.shared.encrypt(data: jsonData) else {
+                print("클립보드 암호화 실패")
+                return
+            }
+            
+            print("클립보드 브로드캐스트 - Hash: \(message.hash)")
+            
+            // 모든 연결된 클라이언트에게 전송
+            for client in connectedClients {
+                if client.connection.state == .ready && client.isConnected {
+                    sendWebSocketMessage(encryptedData, to: client)
+                }
+            }
+        } catch {
+            print("클립보드 메시지 생성 오류: \(error)")
+        }
+    }
+    
+    private var lastProcessedHashes: [String: Date] = [:]
+    
+    /// 메시지 처리 여부 결정 (루프 방지)
+    private func shouldProcessMessage(hash: String, from deviceId: String) -> Bool {
+        let now = Date()
+        
+        // 같은 해시를 최근에 처리했는지 확인 (5초 이내)
+        if let lastTime = lastProcessedHashes[hash],
+           now.timeIntervalSince(lastTime) < 5.0 {
+            return false
+        }
+        
+        lastProcessedHashes[hash] = now
+        
+        // 오래된 해시 정리 (1분 이상)
+        lastProcessedHashes = lastProcessedHashes.filter { now.timeIntervalSince($0.value) < 60 }
+        
+        return true
+    }
+    
+    private func updateLocalClipboard(_ content: String) {
+        // 로컬 클립보드 업데이트
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(content, forType: .string)
+        print("로컬 클립보드 업데이트: \(content.prefix(50))...")
     }
     
     private func broadcastToOthers(_ data: Data, except excludeClient: WebSocketConnection) {

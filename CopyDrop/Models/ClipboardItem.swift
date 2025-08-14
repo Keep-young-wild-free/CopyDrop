@@ -38,5 +38,22 @@ final class ClipboardItem {
     }
 }
 
+// POC 호환 메시지 구조체
+struct CopyDropMessage: Codable {
+    let t: Int64           // 타임스탬프 (milliseconds)
+    let from: String       // 디바이스 식별자 
+    let type: String       // 메시지 타입 ("text")
+    let payload: String    // 클립보드 내용
+    let hash: String       // SHA-256 해시
+    
+    init(content: String, deviceId: String) {
+        self.t = Int64(Date().timeIntervalSince1970 * 1000)
+        self.from = deviceId
+        self.type = "text"
+        self.payload = content
+        self.hash = ClipboardItem.sha256(content)
+    }
+}
+
 // CommonCrypto를 위한 import (macOS)
 import CommonCrypto

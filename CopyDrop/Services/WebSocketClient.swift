@@ -82,6 +82,11 @@ class WebSocketClient {
         }
     }
     
+    /// POC 방식 바이너리 메시지 전송
+    func sendBinaryMessage(_ data: Data) {
+        sendMessage(data) // URLSessionWebSocketTask는 이미 바이너리 지원
+    }
+    
     private func receiveMessage() {
         webSocketTask?.receive { [weak self] result in
             DispatchQueue.main.async {
