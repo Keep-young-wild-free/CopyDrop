@@ -187,7 +187,7 @@ xattr -dr com.apple.quarantine /Applications/CopyDrop.app
 
 ### 방화벽 설정
 ```bash
-# 포트 8787 허용 (서버 모드용)
+# 포트 8080 허용 (서버 모드용)
 sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add CopyDrop
 sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp CopyDrop
 ```
@@ -195,7 +195,7 @@ sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp CopyDrop
 ### WiFi 설정
 - 모든 디바이스가 **같은 WiFi 네트워크**에 연결되어야 함
 - 서버 Mac의 IP 주소: 설정에서 확인 가능
-- 클라이언트 연결 URL: `ws://192.168.x.x:8787/ws`
+- 클라이언트 연결 URL: `ws://192.168.x.x:8080/ws`
 
 ## 📋 체크리스트
 

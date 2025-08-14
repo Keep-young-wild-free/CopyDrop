@@ -81,7 +81,7 @@ UI 업데이트: 변경 시에만 실행
 
 ### 네트워크 최적화
 ```
-기본 포트: 8787 (방화벽 설정 필요)
+기본 포트: 8080 (방화벽 설정 필요)
 메시지 크기: 최대 10KB (설정으로 제한)
 재연결 지연: 2초 (너무 빠른 재시도 방지)
 연결 타임아웃: 10초
@@ -92,7 +92,7 @@ UI 업데이트: 변경 시에만 실행
 ### 시스템 설정 최적화
 
 ```bash
-# 1. 방화벽 예외 추가 (포트 8787)
+# 1. 방화벽 예외 추가 (포트 8080)
 sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /path/to/CopyDrop.app
 sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp /path/to/CopyDrop.app
 
@@ -177,7 +177,7 @@ Clipboard.maxContentSize: 10240     // 더 큰 크기: 51200, 절약: 5120
 - [ ] macOS 14.0 이상 
 - [ ] Xcode 설치됨 또는 설치 중
 - [ ] 같은 WiFi 네트워크 연결
-- [ ] 방화벽 포트 8787 허용
+- [ ] 방화벽 포트 8080 허용
 - [ ] 충분한 디스크 공간 (최소 100MB)
 
 ### ✅ 첫 실행 순서

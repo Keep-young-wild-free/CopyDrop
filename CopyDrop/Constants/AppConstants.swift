@@ -11,8 +11,8 @@ struct AppConstants {
     
     // MARK: - Network
     struct Network {
-        static let defaultPort: UInt16 = 8787
-        static let defaultServerURL = "ws://localhost:8787/ws"
+        static let defaultPort: UInt16 = 8080
+        static let defaultServerURL = "ws://localhost:8080/ws"
         static let reconnectDelay: TimeInterval = 2.0
         static let pingInterval: TimeInterval = 30.0
         static let connectionTimeout: TimeInterval = 10.0

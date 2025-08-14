@@ -22,6 +22,9 @@ struct ContentView: View {
     @State private var showingSystemTest: Bool = false
     @State private var serverURL = AppConstants.Network.defaultServerURL
     @State private var syncMode: SyncMode = .server
+    @State private var discoveredServers: [NetworkUtils.DiscoveredServer] = []
+    @State private var isScanning = false
+    @State private var showingServerPicker = false
     
     @Query(sort: \ClipboardItem.timestamp, order: .reverse) 
     private var clipboardItems: [ClipboardItem]
@@ -251,13 +254,111 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showingQRCode = false
     @State private var qrCodeContent = ""
+    @State private var discoveredServers: [NetworkUtils.DiscoveredServer] = []
+    @State private var isScanning = false
+    @StateObject private var bonjourBrowser = NetworkUtils.BonjourServiceBrowser()
     
     var body: some View {
         NavigationView {
             Form {
                 Section("연결 설정") {
-                    TextField("서버 URL", text: $serverURL)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                    HStack {
+                        TextField("서버 URL", text: $serverURL)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                        
+                        Button(action: startBroadcastScan) {
+                            if isScanning {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                            } else {
+                                Image(systemName: "wifi.circle")
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                        .disabled(isScanning)
+                        .help("자동 서버 발견")
+                        
+                        Button(action: startSmartScan) {
+                            if isScanning {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                            } else {
+                                Image(systemName: "magnifyingglass.circle")
+                                    .foregroundColor(.green)
+                            }
+                        }
+                        .disabled(isScanning)
+                        .help("스마트 IP 스캔 (±5개 + 일반적 주소)")
+                        
+                        Button(action: startBonjourSearch) {
+                            if bonjourBrowser.isSearching {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                            } else {
+                                Image(systemName: "bonjour")
+                                    .foregroundColor(.purple)
+                            }
+                        }
+                        .disabled(bonjourBrowser.isSearching)
+                        .help("Bonjour 서비스 발견 (DNS-SD)")
+                    }
+                    
+                    // 브로드캐스트로 발견된 서버들
+                    if !discoveredServers.isEmpty {
+                        Text("브로드캐스트로 발견된 서버")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        ForEach(discoveredServers, id: \.deviceId) { server in
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(server.deviceName)
+                                        .font(.headline)
+                                    Text(server.connectionURL)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                
+                                Spacer()
+                                
+                                Button("연결") {
+                                    serverURL = server.connectionURL
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                    
+                    // Bonjour로 발견된 서버들
+                    if !bonjourBrowser.discoveredServices.isEmpty {
+                        Text("Bonjour로 발견된 서버")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        ForEach(bonjourBrowser.discoveredServices, id: \.name) { service in
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(service.deviceName)
+                                        .font(.headline)
+                                    Text(service.connectionURL)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Text("Bonjour: \(service.name)")
+                                        .font(.caption2)
+                                        .foregroundColor(.purple)
+                                }
+                                
+                                Spacer()
+                                
+                                Button("연결") {
+                                    serverURL = service.connectionURL
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
                     
                     if let localIP = NetworkUtils.getLocalIPAddress() {
                         HStack {
@@ -267,7 +368,7 @@ struct SettingsView: View {
                             
                             Button("복사") {
                                 NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString("ws://\(localIP):8787/ws", forType: .string)
+                                NSPasteboard.general.setString("ws://\(localIP):8080/ws", forType: .string)
                             }
                             .font(.caption)
                         }
@@ -353,6 +454,63 @@ struct SettingsView: View {
         .sheet(isPresented: $showingQRCode) {
             QRCodeView(content: qrCodeContent)
         }
+    }
+    
+    // MARK: - Network Discovery Methods
+    
+    private func startBroadcastScan() {
+        isScanning = true
+        discoveredServers.removeAll()
+        
+        Task {
+            let servers = await NetworkUtils.discoverServers(timeout: 3.0) { server in
+                // 실시간으로 발견된 서버 추가
+                if !discoveredServers.contains(where: { $0.deviceId == server.deviceId }) {
+                    discoveredServers.append(server)
+                }
+            }
+            
+            await MainActor.run {
+                isScanning = false
+                print("브로드캐스트 스캔 완료: \(servers.count)개 서버 발견")
+            }
+        }
+    }
+    
+    private func startSmartScan() {
+        isScanning = true
+        discoveredServers.removeAll()
+        
+        Task {
+            let servers = await NetworkUtils.smartIPScan(port: 8080, timeout: 0.5) { serverURL in
+                // 발견된 서버를 DiscoveredServer 형태로 변환
+                if let url = URL(string: serverURL),
+                   let host = url.host {
+                    let server = NetworkUtils.DiscoveredServer(
+                        ipAddress: host,
+                        port: UInt16(url.port ?? 8080),
+                        deviceName: "CopyDrop 서버 (\(host))",
+                        deviceId: "unknown-\(host)",
+                        timestamp: Date()
+                    )
+                    
+                    if !discoveredServers.contains(where: { $0.ipAddress == server.ipAddress }) {
+                        discoveredServers.append(server)
+                    }
+                }
+            }
+            
+            await MainActor.run {
+                isScanning = false
+                print("스마트 IP 스캔 완료: \(servers.count)개 서버 발견")
+            }
+        }
+    }
+    
+    // MARK: - Bonjour Discovery Methods
+    
+    private func startBonjourSearch() {
+        bonjourBrowser.startSearching()
     }
 }
 

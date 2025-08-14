@@ -123,8 +123,8 @@ class SystemTester {
         let _ = NetworkUtils.isPortAvailable(9999) // 테스트용 포트
         
         // URL 검증
-        let validWS = NetworkUtils.isValidWebSocketURL("ws://localhost:8787/ws")
-        let invalidWS = NetworkUtils.isValidWebSocketURL("http://localhost:8787")
+        let validWS = NetworkUtils.isValidWebSocketURL("ws://localhost:8080/ws")
+        let invalidWS = NetworkUtils.isValidWebSocketURL("http://localhost:8080")
         
         if localIP != nil && validWS && !invalidWS {
             testResults.append(TestResult("네트워크 유틸리티", success: true,
