@@ -94,7 +94,7 @@ struct ErrorLogRow: View {
             
             Text("컨텍스트: \(entry.context)")
                 .font(.caption2)
-                .foregroundColor(.tertiary)
+                .foregroundColor(Color.secondary.opacity(0.7))
                 .padding(.leading, 20)
         }
         .padding(.vertical, 4)

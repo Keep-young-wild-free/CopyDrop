@@ -82,7 +82,7 @@ class ClipboardMonitor {
     
     private func saveClipboardItem(content: String) {
         guard let context = modelContext else {
-            logger.log("ModelContext가 설정되지 않음", level: .warning)
+            logger.log("ModelContext가 설정되지 않음", level: LogLevel.warning)
             return
         }
         
@@ -93,7 +93,7 @@ class ClipboardMonitor {
             try context.save()
             logger.logClipboard("클립보드 아이템 저장됨")
         } catch {
-            logger.log("클립보드 아이템 저장 실패: \(error)", level: .error)
+            logger.log("클립보드 아이템 저장 실패: \(error)", level: LogLevel.error)
         }
     }
     

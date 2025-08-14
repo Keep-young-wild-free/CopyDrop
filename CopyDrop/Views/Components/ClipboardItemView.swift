@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct ClipboardItemView: View {
     let item: ClipboardItem
@@ -43,7 +44,7 @@ struct ClipboardItemView: View {
             #if DEBUG
             Text("Hash: \(item.hash.prefix(16))...")
                 .font(.caption2)
-                .foregroundColor(.tertiary)
+                .foregroundColor(Color.secondary.opacity(0.7))
                 .textSelection(.enabled)
             #endif
         }
@@ -82,13 +83,18 @@ struct ClipboardItemView: View {
     }
     
     private func shareContent() {
-        let activityVC = NSActivityViewController(
-            activityItems: [item.content],
-            applicationActivities: nil
-        )
+        // macOS의 공유 메뉴 사용
+        let sharingService = NSSharingService(named: .init("com.apple.share.System.add-to-reading-list"))
+        let items = [item.content]
         
-        if let window = NSApplication.shared.keyWindow {
-            window.contentViewController?.present(activityVC, animated: true)
+        if let service = NSSharingService(named: .composeEmail) {
+            if service.canPerform(withItems: items) {
+                service.perform(withItems: items)
+            }
+        } else {
+            // 대안: 클립보드에 복사
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(item.content, forType: .string)
         }
     }
 }

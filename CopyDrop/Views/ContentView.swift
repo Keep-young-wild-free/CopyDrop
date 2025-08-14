@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import AppKit
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -15,10 +16,10 @@ struct ContentView: View {
     @State private var syncManager: SyncManager
     @State private var encryptionTester: EncryptionTester
     @State private var systemTester: SystemTester
-    @State private var showingSettings = false
-    @State private var showingEncryptionTest = false
-    @State private var showingErrorLog = false
-    @State private var showingSystemTest = false
+    @State private var showingSettings: Bool = false
+    @State private var showingEncryptionTest: Bool = false
+    @State private var showingErrorLog: Bool = false
+    @State private var showingSystemTest: Bool = false
     @State private var serverURL = AppConstants.Network.defaultServerURL
     @State private var syncMode: SyncMode = .server
     
@@ -173,6 +174,7 @@ struct ContentView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView(
                 serverURL: $serverURL,
+                showingErrorLog: $showingErrorLog,
                 syncManager: syncManager,
                 errorHandler: errorHandler
             )
@@ -243,6 +245,7 @@ struct ContentView: View {
 // MARK: - Settings View
 struct SettingsView: View {
     @Binding var serverURL: String
+    @Binding var showingErrorLog: Bool
     let syncManager: SyncManager
     let errorHandler: ErrorHandler
     @Environment(\.dismiss) private var dismiss
@@ -309,7 +312,10 @@ struct SettingsView: View {
                     .foregroundColor(.orange)
                 }
                 
-                Section("오류 로그") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("오류 로그")
+                        .font(.headline)
+                        .padding(.bottom, 4)
                     HStack {
                         Text("최근 오류")
                         Spacer()

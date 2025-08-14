@@ -228,7 +228,7 @@ class ClipboardSyncService {
     }
     
     // MARK: - Encryption/Decryption
-    private func encryptData(_ data: Data) -> Data? {
+    internal func encryptData(_ data: Data) -> Data? {
         guard let key = encryptionKey else {
             errorHandler.handle(.invalidKey)
             return nil
@@ -241,12 +241,12 @@ class ClipboardSyncService {
             return iv + sealedBox.ciphertext + sealedBox.tag
         } catch {
             errorHandler.handle(.encryptionFailed)
-            Logger.shared.log("암호화 실패: \(error)", level: .error)
+            Logger.shared.log("암호화 실패: \(error)", level: LogLevel.error)
             return nil
         }
     }
     
-    private func decryptData(_ data: Data) -> Data? {
+    internal func decryptData(_ data: Data) -> Data? {
         guard let key = encryptionKey else {
             errorHandler.handle(.invalidKey)
             return nil
@@ -267,7 +267,7 @@ class ClipboardSyncService {
             return try AES.GCM.open(sealedBox, using: key)
         } catch {
             errorHandler.handle(.decryptionFailed)
-            Logger.shared.log("복호화 실패: \(error)", level: .error)
+            Logger.shared.log("복호화 실패: \(error)", level: LogLevel.error)
             return nil
         }
     }

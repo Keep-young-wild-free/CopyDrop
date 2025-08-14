@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CopyDrop 웹 클라이언트</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .status {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+        input, textarea, button {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            margin: 8px 0;
+            box-sizing: border-box;
+        }
+        button {
+            background: #007AFF;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover { background: #0056CC; }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .clipboard-item {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 12px;
+            margin: 8px 0;
+            cursor: pointer;
+        }
+        .clipboard-item:hover { background: #e9ecef; }
+        .timestamp {
+            font-size: 12px;
+            color: #6c757d;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📋 CopyDrop 웹 클라이언트</h1>
+        
+        <div id="status" class="status disconnected">연결 안됨</div>
+        
+        <div>
+            <input type="text" id="serverUrl" placeholder="서버 URL (예: ws://192.168.1.100:8787/ws)" 
+                   value="ws://localhost:8787/ws">
+            <button onclick="connect()" id="connectBtn">연결</button>
+        </div>
+        
+        <div>
+            <h3>클립보드 전송</h3>
+            <textarea id="clipboardInput" rows="4" placeholder="전송할 텍스트를 입력하세요..."></textarea>
+            <button onclick="sendClipboard()" id="sendBtn" disabled>전송</button>
+        </div>
+        
+        <div>
+            <h3>수신된 클립보드</h3>
+            <div id="clipboardHistory"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let isConnected = false;
+
+        function updateStatus(connected, message = '') {
+            const statusEl = document.getElementById('status');
+            const connectBtn = document.getElementById('connectBtn');
+            const sendBtn = document.getElementById('sendBtn');
+            
+            if (connected) {
+                statusEl.textContent = '✅ 연결됨 ' + message;
+                statusEl.className = 'status connected';
+                connectBtn.textContent = '연결 해제';
+                sendBtn.disabled = false;
+                isConnected = true;
+            } else {
+                statusEl.textContent = '❌ 연결 안됨 ' + message;
+                statusEl.className = 'status disconnected';
+                connectBtn.textContent = '연결';
+                sendBtn.disabled = true;
+                isConnected = false;
+            }
+        }
+
+        function connect() {
+            if (isConnected) {
+                disconnect();
+                return;
+            }
+
+            const serverUrl = document.getElementById('serverUrl').value;
+            if (!serverUrl) {
+                alert('서버 URL을 입력해주세요');
+                return;
+            }
+
+            try {
+                ws = new WebSocket(serverUrl);
+                
+                ws.onopen = function() {
+                    updateStatus(true);
+                    addToHistory('🔗 CopyDrop에 연결되었습니다!', 'system');
+                };
+
+                ws.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'clipboard_update' && data.content) {
+                            addToHistory(data.content, 'received');
+                            
+                            // 자동으로 클립보드에 복사 (브라우저 정책에 따라 작동하지 않을 수 있음)
+                            if (navigator.clipboard) {
+                                navigator.clipboard.writeText(data.content).catch(e => {
+                                    console.log('클립보드 복사 실패:', e);
+                                });
+                            }
+                        }
+                    } catch (e) {
+                        console.error('메시지 파싱 오류:', e);
+                    }
+                };
+
+                ws.onclose = function() {
+                    updateStatus(false, '(연결 종료됨)');
+                    addToHistory('🔌 연결이 종료되었습니다', 'system');
+                };
+
+                ws.onerror = function(error) {
+                    updateStatus(false, '(연결 오류)');
+                    addToHistory('❌ 연결 오류: ' + error, 'system');
+                };
+
+            } catch (error) {
+                updateStatus(false, '(연결 실패)');
+                alert('연결 실패: ' + error.message);
+            }
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+
+        function sendClipboard() {
+            const content = document.getElementById('clipboardInput').value;
+            if (!content.trim()) {
+                alert('전송할 내용을 입력해주세요');
+                return;
+            }
+
+            if (!isConnected || !ws) {
+                alert('먼저 서버에 연결해주세요');
+                return;
+            }
+
+            try {
+                const message = {
+                    type: 'clipboard_update',
+                    content: content,
+                    timestamp: Date.now(),
+                    source: 'web_client'
+                };
+
+                ws.send(JSON.stringify(message));
+                addToHistory(content, 'sent');
+                document.getElementById('clipboardInput').value = '';
+                
+            } catch (error) {
+                alert('전송 실패: ' + error.message);
+            }
+        }
+
+        function addToHistory(content, type) {
+            const historyEl = document.getElementById('clipboardHistory');
+            const item = document.createElement('div');
+            item.className = 'clipboard-item';
+            
+            let icon = '';
+            switch(type) {
+                case 'received': icon = '📥'; break;
+                case 'sent': icon = '📤'; break;
+                case 'system': icon = 'ℹ️'; break;
+            }
+            
+            item.innerHTML = `
+                <div>${icon} ${content}</div>
+                <div class="timestamp">${new Date().toLocaleTimeString()}</div>
+            `;
+            
+            item.onclick = function() {
+                if (navigator.clipboard && type !== 'system') {
+                    navigator.clipboard.writeText(content).then(() => {
+                        alert('클립보드에 복사되었습니다!');
+                    }).catch(e => {
+                        console.log('클립보드 복사 실패:', e);
+                        // 대안: 텍스트 선택
+                        if (window.getSelection) {
+                            const selection = window.getSelection();
+                            const range = document.createRange();
+                            range.selectNodeContents(item);
+                            selection.removeAllRanges();
+                            selection.addRange(range);
+                        }
+                    });
+                }
+            };
+            
+            historyEl.insertBefore(item, historyEl.firstChild);
+            
+            // 최대 50개 항목만 유지
+            while (historyEl.children.length > 50) {
+                historyEl.removeChild(historyEl.lastChild);
+            }
+        }
+
+        // Enter 키로 전송
+        document.getElementById('clipboardInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && e.ctrlKey) {
+                sendClipboard();
+            }
+        });
+    </script>
+</body>
+</html>

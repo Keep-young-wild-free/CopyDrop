@@ -62,7 +62,9 @@ class WebSocketServer {
             }
             
             listener?.newConnectionHandler = { [weak self] connection in
-                self?.handleNewConnection(connection)
+                Task { @MainActor in
+                    self?.handleNewConnection(connection)
+                }
             }
             
             listener?.start(queue: .main)
@@ -109,7 +111,9 @@ class WebSocketServer {
                 DispatchQueue.main.async {
                     self?.connectedClients.append(connection)
                 }
-                self?.receiveData(from: connection)
+                Task { @MainActor in
+                    self?.receiveData(from: connection)
+                }
                 
             case .failed(let error):
                 print("클라이언트 연결 실패: \(error)")
@@ -143,7 +147,9 @@ class WebSocketServer {
             }
             
             if !isComplete {
-                self?.receiveData(from: connection)
+                Task { @MainActor in
+                    self?.receiveData(from: connection)
+                }
             }
         }
     }

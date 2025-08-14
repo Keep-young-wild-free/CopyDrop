@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftData
+import AppKit
 
 /// 전체 동기화 시스템을 관리하는 통합 매니저
 @MainActor
@@ -140,8 +141,11 @@ class SyncManager {
             }
             
             // 동기화가 활성화된 경우에만 자동 동기화
-            if self.isServerRunning || self.isClientConnected {
-                self.checkAndSyncClipboard()
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                if self.isServerRunning || self.isClientConnected {
+                    self.checkAndSyncClipboard()
+                }
             }
         }
     }
@@ -169,7 +173,7 @@ class SyncManager {
         let message = createClipboardMessage(content: content)
         
         guard let messageData = try? JSONSerialization.data(withJSONObject: message) else {
-            logger.log("메시지 시리얼라이즈 실패", level: .error)
+            logger.log("메시지 시리얼라이즈 실패", level: LogLevel.error)
             return
         }
         
@@ -203,7 +207,7 @@ class SyncManager {
         // JSON 파싱
         guard let json = try? JSONSerialization.jsonObject(with: decryptedData) as? [String: Any],
               let payload = json["payload"] as? String,
-              let hash = json["hash"] as? String else {
+              let _ = json["hash"] as? String else {
             errorHandler.handle(.invalidMessage)
             return
         }
@@ -238,7 +242,7 @@ class SyncManager {
     }
     
     private func encryptMessage(_ data: Data) -> Data? {
-        guard let key = SecurityManager.shared.getEncryptionKey() else {
+        guard SecurityManager.shared.getEncryptionKey() != nil else {
             return nil
         }
         
@@ -271,7 +275,7 @@ class SyncManager {
         do {
             try context.save()
         } catch {
-            logger.log("원격 클립보드 아이템 저장 실패: \(error)", level: .error)
+            logger.log("원격 클립보드 아이템 저장 실패: \(error)", level: LogLevel.error)
         }
     }
 }

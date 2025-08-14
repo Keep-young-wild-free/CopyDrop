@@ -110,7 +110,7 @@ struct TestResultRow: View {
                 
                 Text(result.timestamp.formatted(.dateTime.hour().minute().second()))
                     .font(.caption2)
-                    .foregroundColor(.tertiary)
+                    .foregroundColor(Color.secondary.opacity(0.7))
             }
             
             Spacer()

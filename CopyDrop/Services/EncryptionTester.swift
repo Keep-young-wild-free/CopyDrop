@@ -17,6 +17,10 @@ class EncryptionTester {
     
     private let logger = Logger.shared
     
+    init(errorHandler: ErrorHandler? = nil) {
+        // 현재는 errorHandler를 사용하지 않지만 향후 확장을 위해 매개변수 유지
+    }
+    
     struct TestResult {
         let testName: String
         let success: Bool

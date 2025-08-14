@@ -201,17 +201,17 @@ struct SystemTestResultRow: View {
             
             Text(result.timestamp.formatted(.dateTime.hour().minute().second()))
                 .font(.caption2)
-                .foregroundColor(.tertiary)
+                .foregroundColor(Color.secondary.opacity(0.7))
                 .padding(.leading, 30)
         }
         .padding()
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(result.success ? Color.green.opacity(0.1) : Color.red.opacity(0.1))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(result.success ? Color.green.opacity(0.3) : Color.red.opacity(0.3), lineWidth: 1)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(result.success ? Color.green.opacity(0.3) : Color.red.opacity(0.3), lineWidth: 1)
+                )
         )
     }
 }

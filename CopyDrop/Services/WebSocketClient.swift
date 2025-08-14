@@ -66,14 +66,14 @@ class WebSocketClient {
     
     func sendMessage(_ data: Data) {
         guard isConnected, let webSocketTask = webSocketTask else {
-            logger.logNetwork("WebSocket이 연결되지 않음", level: .warning)
+            logger.logNetwork("WebSocket이 연결되지 않음", level: LogLevel.warning)
             return
         }
         
         webSocketTask.send(.data(data)) { [weak self] error in
             DispatchQueue.main.async {
                 if let error = error {
-                    self?.logger.logNetwork("메시지 전송 실패: \(error)", level: .error)
+                    self?.logger.logNetwork("메시지 전송 실패: \(error)", level: LogLevel.error)
                     self?.handleConnectionError()
                 } else {
                     self?.logger.logNetwork("메시지 전송 성공 (\(data.count) bytes)")
@@ -93,7 +93,7 @@ class WebSocketClient {
                     self.receiveMessage() // 다음 메시지 대기
                     
                 case .failure(let error):
-                    self.logger.logNetwork("메시지 수신 실패: \(error)", level: .error)
+                    self.logger.logNetwork("메시지 수신 실패: \(error)", level: LogLevel.error)
                     self.handleConnectionError()
                 }
             }
@@ -115,7 +115,7 @@ class WebSocketClient {
             }
             
         @unknown default:
-            logger.logNetwork("알 수 없는 메시지 타입", level: .warning)
+            logger.logNetwork("알 수 없는 메시지 타입", level: LogLevel.warning)
         }
     }
     
@@ -123,7 +123,7 @@ class WebSocketClient {
         webSocketTask?.sendPing { [weak self] error in
             DispatchQueue.main.async {
                 if let error = error {
-                    self?.logger.logNetwork("Ping 실패: \(error)", level: .error)
+                    self?.logger.logNetwork("Ping 실패: \(error)", level: LogLevel.error)
                     self?.handleConnectionError()
                 } else {
                     self?.isConnected = true
@@ -144,7 +144,7 @@ class WebSocketClient {
             self.webSocketTask?.sendPing { error in
                 DispatchQueue.main.async {
                     if let error = error {
-                        self.logger.logNetwork("정기 Ping 실패: \(error)", level: .warning)
+                        self.logger.logNetwork("정기 Ping 실패: \(error)", level: LogLevel.warning)
                         self.handleConnectionError()
                     } else {
                         self.schedulePing() // 다음 핑 예약

@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftData
+import AppKit
 
 /// 전체 시스템 통합 테스트
 @MainActor
@@ -44,7 +45,7 @@ class SystemTester {
         
         isRunning = true
         testResults.removeAll()
-        logger.log("전체 시스템 테스트 시작", level: .info)
+        logger.log("전체 시스템 테스트 시작", level: LogLevel.info)
         
         await testAppConstants()
         await testSecuritySystem()
@@ -56,7 +57,7 @@ class SystemTester {
         
         isRunning = false
         let successCount = testResults.filter(\.success).count
-        logger.log("전체 시스템 테스트 완료: \(successCount)/\(testResults.count) 성공", level: .info)
+        logger.log("전체 시스템 테스트 완료: \(successCount)/\(testResults.count) 성공", level: LogLevel.info)
     }
     
     // MARK: - Individual Tests
@@ -119,7 +120,7 @@ class SystemTester {
         let localIP = NetworkUtils.getLocalIPAddress()
         
         // 포트 사용 가능성 확인
-        let portAvailable = NetworkUtils.isPortAvailable(9999) // 테스트용 포트
+        let _ = NetworkUtils.isPortAvailable(9999) // 테스트용 포트
         
         // URL 검증
         let validWS = NetworkUtils.isValidWebSocketURL("ws://localhost:8787/ws")
@@ -240,10 +241,10 @@ class SystemTester {
         logger.log("로깅 시스템 테스트 시작")
         
         // 다양한 레벨 로그 테스트
-        Logger.shared.log("디버그 메시지", level: .debug)
-        Logger.shared.log("정보 메시지", level: .info)
-        Logger.shared.log("경고 메시지", level: .warning)
-        Logger.shared.log("에러 메시지", level: .error)
+        Logger.shared.log("디버그 메시지", level: LogLevel.debug)
+        Logger.shared.log("정보 메시지", level: LogLevel.info)
+        Logger.shared.log("경고 메시지", level: LogLevel.warning)
+        Logger.shared.log("에러 메시지", level: LogLevel.error)
         
         // 카테고리별 로그 테스트
         Logger.shared.logNetwork("네트워크 테스트 메시지")

@@ -58,6 +58,8 @@ class Logger {
             osLogger.warning("\(message, privacy: .public)")
         case .error:
             osLogger.error("\(message, privacy: .public)")
+        case .security:
+            osLogger.fault("\(message, privacy: .public)")
         }
         
         // File logging for errors
