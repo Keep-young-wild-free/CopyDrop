@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.CopyDrop" parent="android:Theme.Holo.Light">
+        <item name="android:colorPrimary">@android:color/holo_blue_bright</item>
+    </style>
+</resources>
