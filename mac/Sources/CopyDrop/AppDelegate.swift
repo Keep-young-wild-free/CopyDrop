@@ -8,13 +8,41 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("🎯 AppDelegate.applicationDidFinishLaunching 호출됨")
         
+        // 개발 중에는 중복 실행 방지 로직 건너뛰기
+        print("🔄 앱 초기화 진행...")
+        
         setupMenuBar()
+        setupAppStateObservers()
+        
+        // 푸시 알림 권한 요청
+        NotificationManager.shared.requestNotificationPermission()
         
         // 서비스 시작
         ClipboardManager.shared.start()
         BluetoothManager.shared.start()
         
         print("✅ CopyDrop 초기화 완료")
+    }
+    
+    private func setupAppStateObservers() {
+        // 앱이 활성화될 때 (포그라운드 전환)
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            print("📱 앱 포그라운드 전환 감지")
+            ClipboardManager.shared.onAppForeground()
+        }
+        
+        // 앱이 비활성화될 때 (백그라운드 전환)
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            print("📱 앱 백그라운드 전환 감지")
+        }
     }
     
     private func setupMenuBar() {
@@ -61,6 +89,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc func statusBarButtonClicked(_ sender: NSStatusBarButton) {
+        // 메뉴바 클릭 시 스마트 폴링 재시작 (사용자 활동 감지)
+        ClipboardManager.shared.forceCheckClipboard()
+        
         // Maccy 스타일: 클릭 시 클립보드 메뉴 표시
         showClipboardMenu()
     }
@@ -70,13 +101,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // 클립보드 히스토리 항목들 (최대 10개)
         let history = ClipboardManager.shared.history.prefix(10)
+        print("🍎 메뉴 표시 - 히스토리 항목 수: \(ClipboardManager.shared.history.count)")
         
         if history.isEmpty {
             // 빈 상태
+            print("📭 히스토리가 비어있음")
             let emptyItem = NSMenuItem(title: "클립보드 기록이 없습니다", action: nil, keyEquivalent: "")
             emptyItem.isEnabled = false
             menu.addItem(emptyItem)
         } else {
+            print("📋 히스토리 항목 \(history.count)개 표시")
             // 클립보드 항목들
             for (index, item) in history.enumerated() {
                 let menuItem = createClipboardMenuItem(item: item, index: index)
@@ -89,6 +123,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // 하단 옵션들
         addBottomMenuItems(to: menu)
+        
+        // 메뉴 너비 고정 (50글자 + "..." 기준으로 계산)
+        let sampleText = String(repeating: "A", count: 50) + "..."  // 최대 길이 텍스트
+        let font = NSFont.menuFont(ofSize: 0)  // 기본 메뉴 폰트
+        let textSize = sampleText.size(withAttributes: [.font: font])
+        let menuWidth = textSize.width + 60  // 아이콘 + 패딩 여백
+        
+        menu.minimumWidth = menuWidth
+        print("🎨 메뉴 너비 설정: \(menuWidth)pt")
         
         // 메뉴 표시 (statusItem.button 위치에서)
         guard let button = statusItem?.button else { return }

@@ -120,6 +120,21 @@ class MainActivity : Activity() {
         registerReceiver(appReceiver, intentFilter)
     }
     
+    override fun onResume() {
+        super.onResume()
+        Log.d(TAG, "📱 앱 포그라운드 전환 (onResume)")
+        
+        // 스마트 폴링 재시작
+        if (::clipboardService.isInitialized) {
+            clipboardService.onAppForeground()
+        }
+    }
+    
+    override fun onPause() {
+        super.onPause()
+        Log.d(TAG, "📱 앱 백그라운드 전환 (onPause)")
+    }
+    
     private fun initUI() {
         statusText = findViewById(R.id.statusText)
         connectionIndicator = findViewById(R.id.connectionIndicator)
@@ -557,6 +572,8 @@ class MainActivity : Activity() {
             startActivity(intent)
             
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                Log.d(TAG, "📋 푸시 알림 클릭 - 즉시 클립보드 체크 시작")
+                clipboardService.forceCheckClipboard() // 즉시 폴링
                 sendCurrentClipboardFromToast()
             }, 300)
             

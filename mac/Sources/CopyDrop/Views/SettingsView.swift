@@ -14,6 +14,10 @@ struct SettingsView: View {
             
             Divider()
             
+            notificationSettingsSection
+            
+            Divider()
+            
             appInfoSection
             
             Spacer()
@@ -21,7 +25,7 @@ struct SettingsView: View {
             footerButtons
         }
         .padding(30)
-        .frame(width: 350, height: 450)
+        .frame(width: 350, height: 550)
         .sheet(isPresented: $showAdvancedSettings) {
             AdvancedSettingsView()
         }
@@ -69,6 +73,43 @@ struct SettingsView: View {
                 HStack {
                     Toggle("암호화", isOn: $settings.isEncryptionEnabled)
                         .toggleStyle(.switch)
+                }
+            }
+        }
+    }
+    
+    private var notificationSettingsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("🔔 푸시 알림")
+                .font(.headline)
+            
+            VStack(spacing: 12) {
+                HStack {
+                    Toggle("푸시 알림 사용", isOn: $settings.isNotificationsEnabled)
+                        .toggleStyle(.switch)
+                }
+                
+                if settings.isNotificationsEnabled {
+                    VStack(spacing: 8) {
+                        HStack {
+                            Text("📋")
+                            Toggle("로컬 복사 시 알림", isOn: $settings.isLocalCopyNotificationEnabled)
+                                .toggleStyle(.switch)
+                        }
+                        
+                        HStack {
+                            Text("📱")
+                            Toggle("Android 수신 시 알림", isOn: $settings.isRemoteReceiveNotificationEnabled)
+                                .toggleStyle(.switch)
+                        }
+                        
+                        HStack {
+                            Text("📤")
+                            Toggle("AirDrop 수신 시 알림", isOn: $settings.isAirdropReceiveNotificationEnabled)
+                                .toggleStyle(.switch)
+                        }
+                    }
+                    .padding(.leading, 16)
                 }
             }
         }

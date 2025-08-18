@@ -23,6 +23,11 @@ class ClipboardService(private val context: Context) {
     private var pollingRunnable: Runnable? = null
     private var lastProcessedTime = 0L  // 중복 전송 방지용
     
+    // 스마트 폴링 관련 변수들
+    private var noChangeCount = 0  // 연속으로 변경이 없었던 횟수
+    private var isSmartPollingStopped = false  // 스마트 폴링 중단 상태
+    private val MAX_NO_CHANGE_COUNT = 3  // 3번 연속 변경 없으면 폴링 중단
+    
     interface ClipboardChangeListener {
         fun onClipboardChanged(content: String)
         fun onClipboardChangedForAutoSend() // 자동 전송을 위한 새로운 콜백
@@ -115,14 +120,16 @@ class ClipboardService(private val context: Context) {
         pollingHandler = android.os.Handler(android.os.Looper.getMainLooper())
         pollingRunnable = object : Runnable {
             override fun run() {
-                if (isMonitoring) {
+                if (isMonitoring && !isSmartPollingStopped) {
                     checkClipboardChange()
-                    pollingHandler?.postDelayed(this, 500) // 0.5초마다 체크
+                    pollingHandler?.postDelayed(this, 1000) // 1초마다 체크 (최적화)
+                } else if (isSmartPollingStopped) {
+                    Log.d(TAG, "⏸️ 스마트 폴링 중단됨 - 변경 감지 시 재시작")
                 }
             }
         }
         pollingHandler?.post(pollingRunnable!!)
-        Log.d(TAG, "📊 클립보드 폴링 시작 (0.5초 간격)")
+        Log.d(TAG, "📊 클립보드 스마트 폴링 시작 (1초 간격, 3회 무변경 시 중단)")
     }
     
     private fun checkClipboardChange() {
@@ -141,9 +148,20 @@ class ClipboardService(private val context: Context) {
             Log.d(TAG, "📋 이전 클립보드: '${lastClipboardContent.take(30)}...'")
             
             if (!currentContent.isNullOrEmpty() && currentContent != lastClipboardContent) {
+                // 변경 감지됨 - 카운터 리셋
+                noChangeCount = 0
+                isSmartPollingStopped = false
+                Log.d(TAG, "✅ 클립보드 변경 감지 - 스마트 폴링 카운터 리셋")
                 handleClipboardChange(currentContent, "폴링")
             } else {
-                Log.d(TAG, "📋 클립보드 변경 없음 또는 빈 내용")
+                // 변경 없음 - 카운터 증가
+                noChangeCount++
+                Log.d(TAG, "📋 클립보드 변경 없음 ($noChangeCount/$MAX_NO_CHANGE_COUNT)")
+                
+                if (noChangeCount >= MAX_NO_CHANGE_COUNT) {
+                    isSmartPollingStopped = true
+                    Log.i(TAG, "⏸️ 스마트 폴링 중단됨 (${MAX_NO_CHANGE_COUNT}회 연속 무변경)")
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ 클립보드 체크 오류: ${e.message}")
@@ -232,4 +250,45 @@ class ClipboardService(private val context: Context) {
     }
     
     fun isMonitoring(): Boolean = isMonitoring
+    
+    /**
+     * 즉시 클립보드 체크 (푸시 알림 클릭 시 사용)
+     */
+    fun forceCheckClipboard() {
+        Log.d(TAG, "🚀 즉시 클립보드 체크 요청")
+        if (isMonitoring) {
+            // 스마트 폴링이 중단된 경우 재시작
+            if (isSmartPollingStopped) {
+                Log.i(TAG, "🔄 스마트 폴링 재시작 (즉시 체크 요청)")
+                resumeSmartPolling()
+            }
+            checkClipboardChange()
+        } else {
+            Log.w(TAG, "⚠️ 모니터링이 비활성화된 상태입니다")
+        }
+    }
+    
+    /**
+     * 스마트 폴링 재시작
+     */
+    private fun resumeSmartPolling() {
+        isSmartPollingStopped = false
+        noChangeCount = 0
+        Log.i(TAG, "▶️ 스마트 폴링 재시작됨")
+        
+        // 폴링이 중단된 상태라면 다시 시작
+        if (pollingRunnable != null && pollingHandler != null) {
+            pollingHandler?.post(pollingRunnable!!)
+        }
+    }
+    
+    /**
+     * 포그라운드 전환 시 스마트 폴링 재시작
+     */
+    fun onAppForeground() {
+        if (isSmartPollingStopped) {
+            Log.i(TAG, "🔄 앱 포그라운드 전환 - 스마트 폴링 재시작")
+            resumeSmartPolling()
+        }
+    }
 }

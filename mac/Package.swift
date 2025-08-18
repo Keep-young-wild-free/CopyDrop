@@ -26,7 +26,8 @@ let package = Package(
                 .linkedFramework("SwiftUI"),
                 .linkedFramework("Foundation"),
                 .linkedFramework("CoreBluetooth"),
-                .linkedFramework("Network")
+                .linkedFramework("Network"),
+                .linkedFramework("UserNotifications")
             ]
         )
     ]

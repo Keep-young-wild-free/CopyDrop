@@ -2,6 +2,13 @@ import Foundation
 import CoreBluetooth
 import Network
 import Crypto
+import Compression
+
+extension String {
+    func matches(regex: String) -> Bool {
+        return self.range(of: regex, options: .regularExpression, range: nil, locale: nil) != nil
+    }
+}
 
 struct ConnectedDevice {
     let name: String
@@ -14,8 +21,10 @@ struct ClipboardMessage: Codable {
     let timestamp: String
     let deviceId: String
     let messageId: String
+    let contentType: String // "text", "image", "file"
+    let contentSize: Int // 바이트 단위 크기
     
-    init(content: String, deviceId: String) {
+    init(content: String, deviceId: String, contentType: String = "text") {
         self.content = content
         
         // ISO8601 문자열로 timestamp 생성
@@ -24,6 +33,8 @@ struct ClipboardMessage: Codable {
         
         self.deviceId = deviceId
         self.messageId = UUID().uuidString
+        self.contentType = contentType
+        self.contentSize = content.data(using: .utf8)?.count ?? 0
     }
 }
 
@@ -49,6 +60,59 @@ class BluetoothManager: NSObject, ObservableObject {
     private var characteristic: CBMutableCharacteristic?
     
     private let deviceId: String
+    
+    // 하이브리드 통신을 위한 임계값
+    private static let BLE_SIZE_THRESHOLD = 400 * 1024 // 400KB
+    
+    // gzip 압축/해제 함수들
+    private func compressData(_ data: Data) -> Data? {
+        return data.withUnsafeBytes { bytes in
+            let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: data.count)
+            defer { buffer.deallocate() }
+            
+            let compressedSize = compression_encode_buffer(
+                buffer, data.count,
+                bytes.bindMemory(to: UInt8.self).baseAddress!, data.count,
+                nil, COMPRESSION_LZFSE
+            )
+            
+            guard compressedSize > 0 else { return nil }
+            return Data(bytes: buffer, count: compressedSize)
+        }
+    }
+    
+    private func decompressData(_ compressedData: Data) -> Data? {
+        return compressedData.withUnsafeBytes { bytes in
+            let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: compressedData.count * 4)
+            defer { buffer.deallocate() }
+            
+            let decompressedSize = compression_decode_buffer(
+                buffer, compressedData.count * 4,
+                bytes.bindMemory(to: UInt8.self).baseAddress!, compressedData.count,
+                nil, COMPRESSION_LZFSE
+            )
+            
+            guard decompressedSize > 0 else { return nil }
+            return Data(bytes: buffer, count: decompressedSize)
+        }
+    }
+    
+    // 콘텐츠 타입 감지
+    private func detectContentType(_ content: String) -> String {
+        if content.matches(regex: "^data:image/[a-zA-Z]*;base64,") {
+            return "image"
+        } else if content.hasPrefix("file://") || content.hasPrefix("/") {
+            return "file"
+        } else {
+            return "text"
+        }
+    }
+    
+    // 전송 방식 결정
+    private func shouldUseWiFi(_ content: String, contentType: String) -> Bool {
+        let sizeBytes = content.data(using: .utf8)?.count ?? 0
+        return sizeBytes > Self.BLE_SIZE_THRESHOLD
+    }
     
     private override init() {
         self.deviceId = "mac-" + (Host.current().localizedName ?? "Unknown")
@@ -158,25 +222,58 @@ class BluetoothManager: NSObject, ObservableObject {
             return
         }
         
-        let message = ClipboardMessage(content: content, deviceId: deviceId)
+        let contentType = detectContentType(content)
+        let useWiFi = shouldUseWiFi(content, contentType: contentType)
+        
+        if useWiFi {
+            let sizeMB = Double(content.count) / (1024.0 * 1024.0)
+            print("🌐 큰 데이터 감지 (\(contentType), \(String(format: "%.1f", sizeMB))MB), Wi-Fi 전송 권장")
+            print("⚠️ 파일이 너무 큽니다. Wi-Fi 연결 시 더 빠르게 전송됩니다.")
+            return
+        }
+        
+        let message = ClipboardMessage(content: content, deviceId: deviceId, contentType: contentType)
         
         do {
-            let data = try JSONEncoder().encode(message)
+            let originalData = try JSONEncoder().encode(message)
             
-            // Core Bluetooth를 통한 데이터 전송
+            // 압축 적용
+            guard let compressedData = compressData(originalData) else {
+                print("❌ 데이터 압축 실패, 원본 전송")
+                sendUncompressedData(originalData, content: content)
+                return
+            }
+            
+            let compressionRatio = (1 - Double(compressedData.count) / Double(originalData.count)) * 100
+            print("📤 메시지 전송 시도: \(content.prefix(30))...")
+            print("📤 원본 크기: \(originalData.count) bytes")
+            print("📤 압축 후: \(compressedData.count) bytes (\(String(format: "%.1f", compressionRatio))% 압축)")
+            
+            // Core Bluetooth를 통한 압축된 데이터 전송
             if let characteristic = characteristic {
-                let success = peripheralManager?.updateValue(data, for: characteristic, onSubscribedCentrals: nil) ?? false
+                let success = peripheralManager?.updateValue(compressedData, for: characteristic, onSubscribedCentrals: nil) ?? false
                 if success {
-                    print("BLE 메시지 전송 성공: \(content.prefix(30))...")
+                    print("✅ BLE 압축 메시지 전송 성공")
                 } else {
-                    print("BLE 메시지 전송 실패")
+                    print("❌ BLE 압축 메시지 전송 실패")
                 }
             } else {
-                print("BLE characteristic가 설정되지 않음")
+                print("❌ BLE characteristic가 설정되지 않음")
             }
             
         } catch {
-            print("메시지 인코딩 실패: \(error)")
+            print("❌ 메시지 인코딩 실패: \(error)")
+        }
+    }
+    
+    private func sendUncompressedData(_ data: Data, content: String) {
+        if let characteristic = characteristic {
+            let success = peripheralManager?.updateValue(data, for: characteristic, onSubscribedCentrals: nil) ?? false
+            if success {
+                print("✅ BLE 원본 메시지 전송 성공: \(content.prefix(30))...")
+            } else {
+                print("❌ BLE 원본 메시지 전송 실패")
+            }
         }
     }
     
@@ -213,7 +310,16 @@ class BluetoothManager: NSObject, ObservableObject {
     
     private func processCompleteJson(_ data: Data) {
         do {
-            let message = try JSONDecoder().decode(ClipboardMessage.self, from: data)
+            // 먼저 압축 해제 시도
+            var finalData = data
+            if let decompressedData = decompressData(data) {
+                print("📥 압축 해제 성공: \(data.count) -> \(decompressedData.count) bytes")
+                finalData = decompressedData
+            } else {
+                print("📥 압축 해제 실패 또는 비압축 데이터, 원본 사용")
+            }
+            
+            let message = try JSONDecoder().decode(ClipboardMessage.self, from: finalData)
             
             // 자신이 보낸 메시지는 무시
             guard message.deviceId != deviceId else { 

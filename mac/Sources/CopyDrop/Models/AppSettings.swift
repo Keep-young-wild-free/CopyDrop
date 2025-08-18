@@ -61,6 +61,31 @@ class AppSettings: ObservableObject {
         }
     }
     
+    // MARK: - 푸시 알림 설정
+    @Published var isNotificationsEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isNotificationsEnabled, forKey: "isNotificationsEnabled")
+        }
+    }
+    
+    @Published var isLocalCopyNotificationEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isLocalCopyNotificationEnabled, forKey: "isLocalCopyNotificationEnabled")
+        }
+    }
+    
+    @Published var isRemoteReceiveNotificationEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isRemoteReceiveNotificationEnabled, forKey: "isRemoteReceiveNotificationEnabled")
+        }
+    }
+    
+    @Published var isAirdropReceiveNotificationEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isAirdropReceiveNotificationEnabled, forKey: "isAirdropReceiveNotificationEnabled")
+        }
+    }
+    
     private init() {
         // 기본값 설정
         self.isAutoSyncEnabled = UserDefaults.standard.object(forKey: "isAutoSyncEnabled") as? Bool ?? true
@@ -74,6 +99,12 @@ class AppSettings: ObservableObject {
         self.isHistoryEnabled = UserDefaults.standard.object(forKey: "isHistoryEnabled") as? Bool ?? true
         self.requiresConfirmation = UserDefaults.standard.object(forKey: "requiresConfirmation") as? Bool ?? false
         self.isEncryptionEnabled = UserDefaults.standard.object(forKey: "isEncryptionEnabled") as? Bool ?? true
+        
+        // 푸시 알림 설정 기본값
+        self.isNotificationsEnabled = UserDefaults.standard.object(forKey: "isNotificationsEnabled") as? Bool ?? true
+        self.isLocalCopyNotificationEnabled = UserDefaults.standard.object(forKey: "isLocalCopyNotificationEnabled") as? Bool ?? true
+        self.isRemoteReceiveNotificationEnabled = UserDefaults.standard.object(forKey: "isRemoteReceiveNotificationEnabled") as? Bool ?? true
+        self.isAirdropReceiveNotificationEnabled = UserDefaults.standard.object(forKey: "isAirdropReceiveNotificationEnabled") as? Bool ?? false
     }
     
     // MARK: - 콘텐츠 필터링
@@ -130,5 +161,11 @@ class AppSettings: ObservableObject {
         isHistoryEnabled = true
         requiresConfirmation = false
         isEncryptionEnabled = true
+        
+        // 푸시 알림 기본값
+        isNotificationsEnabled = true
+        isLocalCopyNotificationEnabled = true
+        isRemoteReceiveNotificationEnabled = true
+        isAirdropReceiveNotificationEnabled = false
     }
 }

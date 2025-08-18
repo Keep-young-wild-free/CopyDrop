@@ -12,6 +12,10 @@ import android.util.Log
 import com.copydrop.android.model.ClipboardMessage
 import com.google.gson.Gson
 import java.util.*
+import java.util.zip.GZIPInputStream
+import java.util.zip.GZIPOutputStream
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 
 /**
  * Mac BluetoothManager와 연동하는 Android BLE 클라이언트
@@ -37,6 +41,50 @@ class BluetoothService(private val context: Context) {
     private var targetCharacteristic: BluetoothGattCharacteristic? = null
     private val deviceId = "android-${android.os.Build.MODEL}"
     private var currentMtu = 20 // 기본 MTU 크기
+    
+    // 하이브리드 통신을 위한 임계값 (KB 단위)
+    companion object {
+        private const val BLE_SIZE_THRESHOLD = 400 * 1024 // 400KB 이상이면 Wi-Fi 사용 권장
+        private const val IMAGE_PATTERN = "^data:image/[a-zA-Z]*;base64,"
+    }
+    
+    // gzip 압축/해제 함수들
+    private fun compressData(data: String): ByteArray {
+        val bos = ByteArrayOutputStream()
+        val gzip = GZIPOutputStream(bos)
+        gzip.write(data.toByteArray(Charsets.UTF_8))
+        gzip.close()
+        return bos.toByteArray()
+    }
+    
+    private fun decompressData(compressedData: ByteArray): String {
+        val bis = ByteArrayInputStream(compressedData)
+        val gzip = GZIPInputStream(bis)
+        return gzip.readBytes().toString(Charsets.UTF_8)
+    }
+    
+    // 콘텐츠 타입 감지
+    private fun detectContentType(content: String): String {
+        return when {
+            content.matches(Regex(IMAGE_PATTERN)) -> "image"
+            content.startsWith("file://") || content.startsWith("/") -> "file"
+            else -> "text"
+        }
+    }
+    
+    // 전송 방식 결정
+    private fun shouldUseWiFi(content: String, contentType: String): Boolean {
+        val sizeBytes = content.toByteArray(Charsets.UTF_8).size
+        return when {
+            // 이미지: 500KB 이상 시 Wi-Fi 권장
+            contentType == "image" && sizeBytes > BLE_SIZE_THRESHOLD -> true
+            // 파일: 경로만 전송하므로 BLE 사용
+            contentType == "file" && sizeBytes > BLE_SIZE_THRESHOLD -> true
+            // 일반 텍스트: 500KB 이상 시 Wi-Fi 권장  
+            contentType == "text" && sizeBytes > BLE_SIZE_THRESHOLD -> true
+            else -> false
+        }
+    }
     
     // 콜백 인터페이스
     interface BluetoothServiceCallback {
@@ -143,9 +191,9 @@ class BluetoothService(private val context: Context) {
                 if (service != null) {
                     targetCharacteristic = service.getCharacteristic(CHARACTERISTIC_UUID)
                     targetCharacteristic?.let { characteristic ->
-                        // MTU 크기 요청 (최대 512바이트)
+                        // MTU 크기 요청 (최대 517바이트 - BLE 최대값)
                         Log.d(TAG, "MTU 크기 요청 중...")
-                        gatt.requestMtu(512)
+                        gatt.requestMtu(517)
                         
                         // Notification 활성화
                         gatt.setCharacteristicNotification(characteristic, true)
@@ -177,12 +225,15 @@ class BluetoothService(private val context: Context) {
         
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             if (characteristic.uuid == CHARACTERISTIC_UUID) {
-                val data = characteristic.value
-                val jsonString = String(data, Charsets.UTF_8)
+                val compressedData = characteristic.value
                 
-                Log.d(TAG, "📥 Mac에서 메시지 수신: ${jsonString.take(100)}...")
+                Log.d(TAG, "📥 Mac에서 압축된 메시지 수신: ${compressedData.size} bytes")
                 
                 try {
+                    // gzip 압축 해제
+                    val jsonString = decompressData(compressedData)
+                    Log.d(TAG, "📥 압축 해제 완료: ${jsonString.take(100)}...")
+                    
                     val message = gson.fromJson(jsonString, ClipboardMessage::class.java)
                     
                     // 자신이 보낸 메시지는 무시
@@ -193,7 +244,7 @@ class BluetoothService(private val context: Context) {
                         Log.d(TAG, "자신이 보낸 메시지 무시: ${message.deviceId}")
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "❌ 메시지 파싱 실패: ${jsonString}", e)
+                    Log.e(TAG, "❌ 압축 해제 또는 메시지 파싱 실패", e)
                 }
             }
         }
@@ -210,22 +261,38 @@ class BluetoothService(private val context: Context) {
     }
     
     fun sendMessage(content: String) {
+        val contentType = detectContentType(content)
+        val useWiFi = shouldUseWiFi(content, contentType)
+        
+        if (useWiFi) {
+            val sizeMB = String.format("%.1f", content.length / (1024.0 * 1024.0))
+            Log.i(TAG, "🌐 큰 데이터 감지 ($contentType, ${sizeMB}MB), Wi-Fi 전송 권장")
+            callback?.onError("파일이 너무 큽니다 (${sizeMB}MB). Wi-Fi 연결 시 더 빠르게 전송됩니다.")
+            return
+        }
+        
         targetCharacteristic?.let { characteristic ->
-            val message = ClipboardMessage(content, deviceId)
+            val message = ClipboardMessage(content, deviceId, contentType)
             val jsonString = gson.toJson(message)
-            val data = jsonString.toByteArray(Charsets.UTF_8)
             
-            Log.d(TAG, "📤 메시지 전송 시도: ${content.take(30)}...")
-            Log.d(TAG, "📤 JSON 크기: ${data.size} bytes, MTU: $currentMtu bytes")
-            Log.d(TAG, "📤 JSON 전체: $jsonString")
+            // gzip 압축 적용
+            val originalData = jsonString.toByteArray(Charsets.UTF_8)
+            val compressedData = compressData(jsonString)
+            val compressionRatio = (1 - compressedData.size.toFloat() / originalData.size) * 100
             
-            if (data.size <= currentMtu) {
+            Log.d(TAG, "📤 메시지 전송 시도 ($contentType): ${content.take(30)}...")
+            Log.d(TAG, "📤 원본 크기: ${originalData.size} bytes")
+            Log.d(TAG, "📤 압축 후: ${compressedData.size} bytes (${String.format("%.1f", compressionRatio)}% 압축)")
+            Log.d(TAG, "📤 MTU: $currentMtu bytes")
+            
+            if (compressedData.size <= currentMtu) {
                 // 한 번에 전송 가능
-                sendSinglePacket(characteristic, data)
+                sendSinglePacket(characteristic, compressedData)
             } else {
                 // 분할 전송 필요
-                Log.w(TAG, "⚠️ 데이터 크기가 MTU를 초과합니다. 분할 전송을 시도합니다.")
-                sendChunkedData(characteristic, data)
+                val estimatedTime = (compressedData.size / currentMtu) * 10 / 1000.0 // 초 단위
+                Log.w(TAG, "⚠️ 분할 전송 시작 (예상 시간: ${String.format("%.1f", estimatedTime)}초)")
+                sendChunkedData(characteristic, compressedData)
             }
         } ?: run {
             Log.e(TAG, "❌ targetCharacteristic이 null입니다")
@@ -265,10 +332,10 @@ class BluetoothService(private val context: Context) {
         if (success) {
             Log.d(TAG, "✅ 청크 ${index + 1}/${chunks.size} 전송 (${chunk.size} bytes)")
             
-            // 다음 청크를 50ms 후에 전송
+            // 다음 청크를 10ms 후에 전송 (5배 빠름)
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 sendNextChunk(characteristic, chunks, index + 1)
-            }, 50)
+            }, 10)
         } else {
             Log.e(TAG, "❌ 청크 ${index + 1} 전송 실패")
         }
