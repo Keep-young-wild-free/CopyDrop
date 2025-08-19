@@ -11,17 +11,15 @@ data class ClipboardMessage(
     val timestamp: String, // ISO8601 문자열로 변경
     val deviceId: String,
     val messageId: String,
-    val contentType: String = "text", // "text", "image", "file"
     val contentSize: Int = 0 // 바이트 단위 크기
 ) {
-    constructor(content: String, deviceId: String, contentType: String = "text") : this(
+    constructor(content: String, deviceId: String) : this(
         content = content,
         timestamp = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.getDefault()).apply {
             timeZone = java.util.TimeZone.getTimeZone("UTC")
         }.format(Date()),
         deviceId = deviceId,
         messageId = UUID.randomUUID().toString(),
-        contentType = contentType,
         contentSize = content.toByteArray(Charsets.UTF_8).size
     )
 }

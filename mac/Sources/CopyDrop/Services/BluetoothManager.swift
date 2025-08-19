@@ -21,10 +21,9 @@ struct ClipboardMessage: Codable {
     let timestamp: String
     let deviceId: String
     let messageId: String
-    let contentType: String // "text", "image", "file"
     let contentSize: Int // 바이트 단위 크기
     
-    init(content: String, deviceId: String, contentType: String = "text") {
+    init(content: String, deviceId: String) {
         self.content = content
         
         // ISO8601 문자열로 timestamp 생성
@@ -33,7 +32,6 @@ struct ClipboardMessage: Codable {
         
         self.deviceId = deviceId
         self.messageId = UUID().uuidString
-        self.contentType = contentType
         self.contentSize = content.data(using: .utf8)?.count ?? 0
     }
 }
@@ -162,22 +160,6 @@ class BluetoothManager: NSObject, ObservableObject {
         }
     }
     
-    // 콘텐츠 타입 감지
-    private func detectContentType(_ content: String) -> String {
-        if content.matches(regex: "^data:image/[a-zA-Z]*;base64,") {
-            return "image"
-        } else if content.hasPrefix("file://") || content.hasPrefix("/") {
-            return "file"
-        } else {
-            return "text"
-        }
-    }
-    
-    // 전송 방식 결정
-    private func shouldUseWiFi(_ content: String, contentType: String) -> Bool {
-        let sizeBytes = content.data(using: .utf8)?.count ?? 0
-        return sizeBytes > Self.BLE_SIZE_THRESHOLD
-    }
     
     private override init() {
         self.deviceId = "mac-" + (Host.current().localizedName ?? "Unknown")
@@ -287,29 +269,23 @@ class BluetoothManager: NSObject, ObservableObject {
             return
         }
         
-        let contentType = detectContentType(content)
         let sizeKB = content.count / 1024
         
         // 크기 체크
         if content.count > Self.BLE_SIZE_THRESHOLD {
             let sizeMB = Double(content.count) / (1024.0 * 1024.0)
-            print("🌐 데이터가 너무 큼 (\(contentType), \(String(format: "%.1f", sizeMB))MB > 200KB)")
+            print("🌐 데이터가 너무 큼 (\(String(format: "%.1f", sizeMB))MB > 10MB)")
             print("⚠️ 파일이 너무 큽니다. Wi-Fi 연결 시 더 빠르게 전송됩니다.")
             return
         }
         
-        // 타입별 처리
-        if contentType == "image" {
-            sendImageData(content, sizeKB: sizeKB)
-        } else {
-            sendTextData(content)
-        }
+        // 텍스트로 처리
+        sendTextData(content)
     }
     
-    // 텍스트 전송 (헤더 포함)
+    // 텍스트 전송
     private func sendTextData(_ content: String) {
-        let textWithHeader = "[TXT]" + content
-        let messageData = textWithHeader.data(using: .utf8) ?? Data()
+        let messageData = content.data(using: .utf8) ?? Data()
         
         print("📝 텍스트 전송: \(content.prefix(50))... (\(messageData.count) bytes)")
         
@@ -325,24 +301,6 @@ class BluetoothManager: NSObject, ObservableObject {
         }
     }
     
-    // 이미지 전송 (헤더 포함)
-    private func sendImageData(_ content: String, sizeKB: Int) {
-        let imageWithHeader = "[IMG]" + content
-        let messageData = imageWithHeader.data(using: .utf8) ?? Data()
-        
-        print("🖼️ 이미지 전송: \(sizeKB)KB (\(messageData.count) bytes)")
-        
-        if let characteristic = characteristic {
-            let success = peripheralManager?.updateValue(messageData, for: characteristic, onSubscribedCentrals: nil) ?? false
-            if success {
-                print("✅ BLE 이미지 전송 성공")
-            } else {
-                print("❌ BLE 이미지 전송 실패")
-            }
-        } else {
-            print("❌ BLE characteristic가 설정되지 않음")
-        }
-    }
     
     private func sendUncompressedData(_ data: Data, content: String) {
         if let characteristic = characteristic {
@@ -366,24 +324,9 @@ class BluetoothManager: NSObject, ObservableObject {
         // 빈 문자열이 아닌 경우 처리
         if !textContent.isEmpty && textContent != "Invalid UTF-8" {
             
-            // 헤더 확인하여 타입 구분
-            if textContent.hasPrefix("[TXT]") {
-                // 텍스트 데이터 처리
-                let content = String(textContent.dropFirst(5)) // "[TXT]" 제거
-                print("📝📝📝 텍스트 데이터 감지: \(content.prefix(50))... 📝📝📝")
-                processTextData(content)
-                
-            } else if textContent.hasPrefix("[IMG]") {
-                // 이미지 데이터 처리  
-                let content = String(textContent.dropFirst(5)) // "[IMG]" 제거
-                print("🖼️🖼️🖼️ 이미지 데이터 감지: \(content.prefix(50))... 🖼️🖼️🖼️")
-                processImageData(content)
-                
-            } else {
-                // 헤더 없는 경우 (기존 텍스트로 처리)
-                print("📝📝📝 헤더 없는 데이터를 텍스트로 처리: \(textContent.prefix(50))... 📝📝📝")
-                processTextData(textContent)
-            }
+            // 모든 데이터를 텍스트로 처리
+            print("📝📝📝 텍스트 데이터 수신: \(textContent.prefix(50))... 📝📝📝")
+            processTextData(textContent)
         } else {
             print("❌❌❌ 유효하지 않은 데이터 ❌❌❌")
         }
@@ -400,16 +343,6 @@ class BluetoothManager: NSObject, ObservableObject {
         }
     }
     
-    // 이미지 데이터 처리
-    private func processImageData(_ content: String) {
-        print("✅✅✅ 이미지 수신 완료! ClipboardManager로 전달 ✅✅✅")
-        
-        DispatchQueue.main.async {
-            print("📋📋📋 ClipboardManager로 이미지 전달 중... 📋📋📋")
-            ClipboardManager.shared.receiveFromRemoteDevice(content)
-            print("📋📋📋 ClipboardManager 이미지 전달 완료! 📋📋📋")
-        }
-    }
     
     // processCompleteJson 함수는 더 이상 사용하지 않음 (순수 텍스트 통신으로 변경)
     

@@ -49,11 +49,6 @@ class MainActivity : Activity() {
     private lateinit var clipboardService: ClipboardService
     
     // 이미지 전송 진행률 UI 요소들
-    private lateinit var imageProgressSection: android.widget.LinearLayout
-    private lateinit var imageProgressSpinner: android.widget.ProgressBar
-    private lateinit var imageProgressText: android.widget.TextView
-    private lateinit var imageProgressBar: android.widget.ProgressBar
-    private lateinit var imageProgressPercent: android.widget.TextView
     
     // 클립보드 기록
     private lateinit var historyAdapter: ClipboardHistoryAdapter
@@ -166,12 +161,6 @@ class MainActivity : Activity() {
         historyListView = findViewById(R.id.historyListView)
         clearHistoryButton = findViewById(R.id.clearHistoryButton)
         
-        // 이미지 진행률 UI 요소 초기화
-        imageProgressSection = findViewById(R.id.imageProgressSection)
-        imageProgressSpinner = findViewById(R.id.imageProgressSpinner)
-        imageProgressText = findViewById(R.id.imageProgressText)
-        imageProgressBar = findViewById(R.id.imageProgressBar)
-        imageProgressPercent = findViewById(R.id.imageProgressPercent)
         
         // 리스트뷰 어댑터 설정
         historyAdapter = ClipboardHistoryAdapter(this, historyList)
@@ -702,47 +691,19 @@ class MainActivity : Activity() {
         
         override fun onMessageReceived(message: ClipboardMessage) {
             runOnUiThread {
-                Log.d(TAG, "📥 Mac에서 ${message.contentType} 수신: ${message.content.take(30)}...")
+                Log.d(TAG, "📥 Mac에서 텍스트 수신: ${message.content.take(30)}...")
                 
-                when (message.contentType) {
-                    "image" -> {
-                        // 이미지 데이터 처리
-                        Log.d(TAG, "🖼️ 이미지 클립보드 처리 시작")
-                        handleImageClipboard(message.content)
-                        
-                        val history = ClipboardHistory(
-                            content = "🖼️ 이미지 (${message.content.length / 1024}KB)",
-                            direction = ClipboardHistory.Direction.RECEIVED,
-                            deviceName = "Mac"
-                        )
-                        historyAdapter.addHistory(history)
-                        showMessage("📥🖼️ 이미지 동기화됨")
-                    }
-                    "text" -> {
-                        // 텍스트 데이터 처리
-                        clipboardService.setClipboardContent(message.content)
-                        
-                        val history = ClipboardHistory(
-                            content = message.content,
-                            direction = ClipboardHistory.Direction.RECEIVED,
-                            deviceName = "Mac"
-                        )
-                        historyAdapter.addHistory(history)
-                        showMessage("📥📝 텍스트 동기화됨")
-                    }
-                    else -> {
-                        // 기본 처리 (호환성)
-                        clipboardService.setClipboardContent(message.content)
-                        
-                        val history = ClipboardHistory(
-                            content = message.content,
-                            direction = ClipboardHistory.Direction.RECEIVED,
-                            deviceName = "Mac"
-                        )
-                        historyAdapter.addHistory(history)
-                        showMessage("📥 클립보드 동기화됨")
-                    }
-                }
+                // 모든 데이터를 텍스트로 처리
+                Log.d(TAG, "📝 텍스트 클립보드 처리 시작")
+                clipboardService.setClipboardContent(message.content)
+                
+                val history = ClipboardHistory(
+                    content = message.content,
+                    direction = ClipboardHistory.Direction.RECEIVED,
+                    deviceName = "Mac"
+                )
+                historyAdapter.addHistory(history)
+                showMessage("📥📝 텍스트 동기화됨")
             }
         }
         
@@ -768,66 +729,6 @@ class MainActivity : Activity() {
         }
         
         // 이미지 전송 관련 콜백 구현
-        override fun onImageTransferStarted(sizeKB: Int) {
-            runOnUiThread {
-                Log.d(TAG, "🖼️ 이미지 전송 시작: ${sizeKB}KB")
-                
-                // 진행률 섹션 표시
-                imageProgressSection.visibility = android.view.View.VISIBLE
-                imageProgressText.text = "이미지 전송 중... (${sizeKB}KB)"
-                imageProgressBar.progress = 0
-                imageProgressPercent.text = "0%"
-                
-                showMessage("🖼️ 이미지 전송 시작 (${sizeKB}KB)")
-            }
-        }
-        
-        override fun onImageTransferProgress(progress: Int) {
-            runOnUiThread {
-                Log.d(TAG, "🖼️ 이미지 전송 진행률: ${progress}%")
-                
-                // 진행률 업데이트
-                imageProgressBar.progress = progress
-                imageProgressPercent.text = "${progress}%"
-                imageProgressText.text = "이미지 전송 중... ${progress}%"
-            }
-        }
-        
-        override fun onImageTransferCompleted() {
-            runOnUiThread {
-                Log.d(TAG, "✅ 이미지 전송 완료")
-                
-                // 진행률 100%로 설정 후 숨기기
-                imageProgressBar.progress = 100
-                imageProgressPercent.text = "100%"
-                imageProgressText.text = "이미지 전송 완료!"
-                
-                // 2초 후 진행률 섹션 숨기기
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    imageProgressSection.visibility = android.view.View.GONE
-                }, 2000)
-                
-                showMessage("✅ 이미지 전송 완료!")
-            }
-        }
-        
-        override fun onImageTransferFailed(error: String) {
-            runOnUiThread {
-                Log.e(TAG, "❌ 이미지 전송 실패: $error")
-                
-                // 오류 메시지 표시
-                imageProgressText.text = "전송 실패: $error"
-                imageProgressText.setTextColor(resources.getColor(android.R.color.holo_red_dark))
-                
-                // 3초 후 진행률 섹션 숨기기
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    imageProgressSection.visibility = android.view.View.GONE
-                    imageProgressText.setTextColor(resources.getColor(android.R.color.holo_blue_dark))
-                }, 3000)
-                
-                showMessage("❌ 이미지 전송 실패: $error")
-            }
-        }
     }
     
     private val clipboardListener = object : ClipboardService.ClipboardChangeListener {
@@ -854,95 +755,6 @@ class MainActivity : Activity() {
         }
     }
     
-    // 이미지 클립보드 처리 함수
-    private fun handleImageClipboard(base64ImageData: String) {
-        try {
-            Log.d(TAG, "🖼️ 이미지 클립보드 처리 시작: ${base64ImageData.length} chars")
-            
-            // base64 문자열을 Bitmap으로 변환
-            val bitmap = base64ToBitmap(base64ImageData)
-            if (bitmap != null) {
-                // 이미지를 클립보드에 설정
-                setImageToClipboard(bitmap)
-                Log.d(TAG, "✅ 이미지 클립보드 설정 완료")
-            } else {
-                Log.e(TAG, "❌ base64 → Bitmap 변환 실패")
-                showMessage("❌ 이미지 처리 실패")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ 이미지 클립보드 처리 오류: ${e.message}")
-            showMessage("❌ 이미지 처리 오류: ${e.message}")
-        }
-    }
-    
-    // base64 문자열을 Bitmap으로 변환
-    private fun base64ToBitmap(base64String: String): android.graphics.Bitmap? {
-        return try {
-            // "data:image/png;base64," 부분 제거
-            val cleanBase64 = if (base64String.contains(",")) {
-                base64String.split(",")[1]
-            } else {
-                base64String
-            }
-            
-            // base64 디코딩
-            val decodedBytes = android.util.Base64.decode(cleanBase64, android.util.Base64.DEFAULT)
-            
-            // Bitmap으로 변환
-            android.graphics.BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ base64 디코딩 오류: ${e.message}")
-            null
-        }
-    }
-    
-    // 이미지를 클립보드에 설정 (간단한 텍스트 방식)
-    private fun setImageToClipboard(bitmap: android.graphics.Bitmap) {
-        try {
-            Log.d(TAG, "🖼️ 이미지 수신됨 - 크기: ${bitmap.width}x${bitmap.height}")
-            
-            // 안드로이드에서는 이미지 클립보드 설정이 복잡하므로
-            // 사용자에게 이미지가 수신되었다는 것을 알리는 텍스트로 대체
-            val imageInfo = "🖼️ 이미지가 Mac에서 수신되었습니다\n크기: ${bitmap.width}x${bitmap.height}px"
-            
-            val clipData = android.content.ClipData.newPlainText("Image Received", imageInfo)
-            val clipboardManager = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-            clipboardManager.setPrimaryClip(clipData)
-            
-            Log.d(TAG, "✅ 이미지 수신 알림을 클립보드에 설정함")
-            
-            // 추가로 이미지를 내부 저장소에 저장 (선택사항)
-            saveImageToStorage(bitmap)
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ 이미지 클립보드 처리 실패: ${e.message}")
-            
-            // 최종 대체 방법
-            try {
-                val clipData = android.content.ClipData.newPlainText("Image", "🖼️ 이미지 수신 (처리 중 오류 발생)")
-                val clipboardManager = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                clipboardManager.setPrimaryClip(clipData)
-            } catch (fallbackError: Exception) {
-                Log.e(TAG, "❌ 최종 대체도 실패: ${fallbackError.message}")
-            }
-        }
-    }
-    
-    // 이미지를 내부 저장소에 저장 (선택사항)
-    private fun saveImageToStorage(bitmap: android.graphics.Bitmap) {
-        try {
-            val filename = "received_image_${System.currentTimeMillis()}.png"
-            val outputStream = openFileOutput(filename, android.content.Context.MODE_PRIVATE)
-            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, outputStream)
-            outputStream.close()
-            
-            Log.d(TAG, "💾 이미지를 내부 저장소에 저장: $filename")
-            showMessage("🖼️ 이미지가 수신되어 저장되었습니다")
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ 이미지 저장 실패: ${e.message}")
-        }
-    }
     
     
     override fun onDestroy() {
