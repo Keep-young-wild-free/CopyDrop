@@ -28,6 +28,12 @@ class ClipboardService(private val context: Context) {
     private var isSmartPollingStopped = false  // 스마트 폴링 중단 상태
     private val MAX_NO_CHANGE_COUNT = 3  // 3번 연속 변경 없으면 폴링 중단
     
+    // 능동적 동기화 관련 변수들
+    private var isActiveSyncEnabled = false  // 포그라운드 시 능동적 동기화
+    private var activeSyncHandler: android.os.Handler? = null
+    private var activeSyncRunnable: Runnable? = null
+    private val ACTIVE_SYNC_INTERVAL = 1000L  // 1초 간격으로 능동 체크
+    
     interface ClipboardChangeListener {
         fun onClipboardChanged(content: String)
         fun onClipboardChangedForAutoSend() // 자동 전송을 위한 새로운 콜백
@@ -136,11 +142,8 @@ class ClipboardService(private val context: Context) {
         val isInForeground = listener?.isAppInForeground() ?: false
         Log.d(TAG, "🔄 클립보드 체크 - 포그라운드: $isInForeground")
         
-        // 앱이 포그라운드에 있을 때만 클립보드 체크 (백그라운드는 접근성 서비스가 담당)
-        if (!isInForeground) {
-            Log.d(TAG, "⏸️ 백그라운드 상태 - 클립보드 체크 스킵 (접근성 서비스가 담당)")
-            return
-        }
+        // 포그라운드일 때는 능동적으로 체크, 백그라운드일 때는 접근성 서비스와 함께 동작
+        // 백그라운드에서도 최소한의 폴링은 유지하여 이중 보안
         
         try {
             val currentContent = getCurrentClipboardContent()
@@ -250,6 +253,62 @@ class ClipboardService(private val context: Context) {
     }
     
     fun isMonitoring(): Boolean = isMonitoring
+    
+    // MARK: - 능동적 동기화 메서드들 (포그라운드 시 사용)
+    
+    /**
+     * 포그라운드 전환 시 능동적 동기화 시작
+     */
+    fun startActiveSync() {
+        if (isActiveSyncEnabled) return
+        
+        isActiveSyncEnabled = true
+        Log.d(TAG, "🚀 능동적 동기화 시작 - ${ACTIVE_SYNC_INTERVAL}ms 간격")
+        
+        activeSyncHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        activeSyncRunnable = object : Runnable {
+            override fun run() {
+                if (isActiveSyncEnabled) {
+                    checkClipboardForActiveSync()
+                    activeSyncHandler?.postDelayed(this, ACTIVE_SYNC_INTERVAL)
+                }
+            }
+        }
+        
+        activeSyncHandler?.post(activeSyncRunnable!!)
+    }
+    
+    /**
+     * 백그라운드 전환 시 능동적 동기화 중단
+     */
+    fun stopActiveSync() {
+        if (!isActiveSyncEnabled) return
+        
+        isActiveSyncEnabled = false
+        Log.d(TAG, "⏸️ 능동적 동기화 중단")
+        
+        activeSyncRunnable?.let { runnable ->
+            activeSyncHandler?.removeCallbacks(runnable)
+        }
+        activeSyncHandler = null
+        activeSyncRunnable = null
+    }
+    
+    /**
+     * 능동적 동기화를 위한 클립보드 체크
+     */
+    private fun checkClipboardForActiveSync() {
+        try {
+            val currentContent = getCurrentClipboardContent()
+            
+            if (!currentContent.isNullOrEmpty() && currentContent != lastClipboardContent) {
+                Log.d(TAG, "🔄 능동적 동기화: 클립보드 변경 감지")
+                handleClipboardChange(currentContent, "능동동기화")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 능동적 동기화 클립보드 체크 오류: ${e.message}")
+        }
+    }
     
     /**
      * 즉시 클립보드 체크 (푸시 알림 클릭 시 사용)

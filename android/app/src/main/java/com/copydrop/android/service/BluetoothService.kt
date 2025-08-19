@@ -16,21 +16,13 @@ import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.util.zip.CRC32
 
 /**
  * Mac BluetoothManager와 연동하는 Android BLE 클라이언트
  * Mac은 Peripheral(서버), Android는 Central(클라이언트)
  */
 class BluetoothService(private val context: Context) {
-    
-    companion object {
-        private const val TAG = "BluetoothService"
-        
-        // Mac BluetoothManager와 동일한 UUID (docs/PROTOCOL.md 참조)
-        private val SERVICE_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-        private val CHARACTERISTIC_UUID = UUID.fromString("00002101-0000-1000-8000-00805F9B34FB")
-        private const val SERVICE_NAME = "CopyDropService"
-    }
     
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val bluetoothAdapter = bluetoothManager.adapter
@@ -42,11 +34,42 @@ class BluetoothService(private val context: Context) {
     private val deviceId = "android-${android.os.Build.MODEL}"
     private var currentMtu = 20 // 기본 MTU 크기
     
+    // 속도 최적화 관련 변수들
+    private var pendingTransmission: PendingTransmission? = null
+    private val sentChunks = mutableMapOf<Int, Boolean>() // 전송 완료된 청크 추적
+    private var retryCount = 0
+    
     // 하이브리드 통신을 위한 임계값 (KB 단위)
     companion object {
-        private const val BLE_SIZE_THRESHOLD = 400 * 1024 // 400KB 이상이면 Wi-Fi 사용 권장
+        private const val TAG = "BluetoothService"
+        
+        // Mac BluetoothManager와 동일한 UUID (docs/PROTOCOL.md 참조)
+        private val SERVICE_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+        private val CHARACTERISTIC_UUID = UUID.fromString("00002101-0000-1000-8000-00805F9B34FB")
+        private const val SERVICE_NAME = "CopyDropService"
+        
+        private const val BLE_SIZE_THRESHOLD = 10 * 1024 * 1024 // 10MB로 변경 (고속 전송 최적화 적용)
         private const val IMAGE_PATTERN = "^data:image/[a-zA-Z]*;base64,"
+        private const val MAX_RETRY_COUNT = 3 // 최대 재전송 횟수
+        private const val PARALLEL_CHUNK_SIZE = 4 // 동시 전송 청크 수
+        private const val OPTIMIZED_INTERVAL = 5L // 최적화된 전송 간격 (ms)
     }
+    
+    // 재전송을 위한 데이터 클래스
+    data class PendingTransmission(
+        val originalData: ByteArray,
+        val chunks: List<OrderedChunk>,
+        val checksum: Long,
+        val messageId: String
+    )
+    
+    // 순서가 보장된 청크
+    data class OrderedChunk(
+        val index: Int,
+        val total: Int,
+        val data: ByteArray,
+        val messageId: String
+    )
     
     // gzip 압축/해제 함수들
     private fun compressData(data: String): ByteArray {
@@ -93,6 +116,7 @@ class BluetoothService(private val context: Context) {
         fun onDisconnected()
         fun onMessageReceived(message: ClipboardMessage)
         fun onError(error: String)
+        fun onSyncRequested() // Mac에서 동기화 요청 시
     }
     
     private var callback: BluetoothServiceCallback? = null
@@ -191,6 +215,10 @@ class BluetoothService(private val context: Context) {
                 if (service != null) {
                     targetCharacteristic = service.getCharacteristic(CHARACTERISTIC_UUID)
                     targetCharacteristic?.let { characteristic ->
+                        // 연결 우선순위 최적화 (속도 향상)
+                        Log.d(TAG, "연결 우선순위 최적화 중...")
+                        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                        
                         // MTU 크기 요청 (최대 517바이트 - BLE 최대값)
                         Log.d(TAG, "MTU 크기 요청 중...")
                         gatt.requestMtu(517)
@@ -225,26 +253,41 @@ class BluetoothService(private val context: Context) {
         
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             if (characteristic.uuid == CHARACTERISTIC_UUID) {
-                val compressedData = characteristic.value
+                val receivedData = characteristic.value
                 
-                Log.d(TAG, "📥 Mac에서 압축된 메시지 수신: ${compressedData.size} bytes")
+                Log.d(TAG, "📥 Mac에서 데이터 수신: ${receivedData.size} bytes")
                 
                 try {
-                    // gzip 압축 해제
-                    val jsonString = decompressData(compressedData)
-                    Log.d(TAG, "📥 압축 해제 완료: ${jsonString.take(100)}...")
+                    val rawJsonString = String(receivedData, Charsets.UTF_8)
+                    
+                    // 먼저 압축되지 않은 동기화 요청인지 확인
+                    if (rawJsonString.contains("\"type\":\"sync_request\"")) {
+                        Log.d(TAG, "🔄 Mac에서 동기화 요청 수신")
+                        handleSyncRequest(rawJsonString)
+                        return
+                    }
+                    
+                    // 압축 해제 시도, 실패하면 원본 사용
+                    val jsonString = try {
+                        val decompressed = decompressData(receivedData)
+                        Log.d(TAG, "📥 압축 해제 성공: ${decompressed.take(100)}...")
+                        decompressed
+                    } catch (e: Exception) {
+                        Log.d(TAG, "📥 압축 해제 실패, 원본 데이터 사용: ${rawJsonString.take(100)}...")
+                        rawJsonString
+                    }
                     
                     val message = gson.fromJson(jsonString, ClipboardMessage::class.java)
                     
                     // 자신이 보낸 메시지는 무시
                     if (message.deviceId != deviceId) {
-                        Log.d(TAG, "✅ 메시지 수신 완료: ${message.content.take(30)}...")
+                        Log.d(TAG, "✅✅✅ Mac에서 메시지 수신 완료: ${message.content.take(30)}... ✅✅✅")
                         callback?.onMessageReceived(message)
                     } else {
                         Log.d(TAG, "자신이 보낸 메시지 무시: ${message.deviceId}")
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "❌ 압축 해제 또는 메시지 파싱 실패", e)
+                    Log.e(TAG, "❌❌❌ JSON 파싱 실패 ❌❌❌", e)
                 }
             }
         }
@@ -261,6 +304,8 @@ class BluetoothService(private val context: Context) {
     }
     
     fun sendMessage(content: String) {
+        Log.d(TAG, "🚀🚀🚀 sendMessage 호출됨: ${content.take(50)}... 🚀🚀🚀")
+        
         val contentType = detectContentType(content)
         val useWiFi = shouldUseWiFi(content, contentType)
         
@@ -272,30 +317,36 @@ class BluetoothService(private val context: Context) {
         }
         
         targetCharacteristic?.let { characteristic ->
+            Log.d(TAG, "📤📤📤 targetCharacteristic 확인됨, 메시지 구성 시작 📤📤📤")
+            
             val message = ClipboardMessage(content, deviceId, contentType)
             val jsonString = gson.toJson(message)
+            
+            Log.d(TAG, "📤 JSON 메시지: $jsonString")
+            Log.d(TAG, "📤 DeviceId: $deviceId")
+            Log.d(TAG, "📤 ContentType: $contentType")
             
             // gzip 압축 적용
             val originalData = jsonString.toByteArray(Charsets.UTF_8)
             val compressedData = compressData(jsonString)
             val compressionRatio = (1 - compressedData.size.toFloat() / originalData.size) * 100
             
-            Log.d(TAG, "📤 메시지 전송 시도 ($contentType): ${content.take(30)}...")
+            Log.d(TAG, "📤📤📤 고속 전송 모드 시작 ($contentType): ${content.take(30)}... 📤📤📤")
             Log.d(TAG, "📤 원본 크기: ${originalData.size} bytes")
             Log.d(TAG, "📤 압축 후: ${compressedData.size} bytes (${String.format("%.1f", compressionRatio)}% 압축)")
             Log.d(TAG, "📤 MTU: $currentMtu bytes")
             
             if (compressedData.size <= currentMtu) {
-                // 한 번에 전송 가능
-                sendSinglePacket(characteristic, compressedData)
+                // MTU 크기 이내: 단일 패킷 전송
+                Log.d(TAG, "📤📤📤 단일 패킷 전송 시작 (${compressedData.size} bytes) 📤📤📤")
+                sendSinglePacketOptimized(characteristic, compressedData)
             } else {
-                // 분할 전송 필요
-                val estimatedTime = (compressedData.size / currentMtu) * 10 / 1000.0 // 초 단위
-                Log.w(TAG, "⚠️ 분할 전송 시작 (예상 시간: ${String.format("%.1f", estimatedTime)}초)")
+                // MTU 초과: 순차 청크 전송 (병렬 아님)
+                Log.d(TAG, "📦📦📦 순차 청크 전송 시작 (${compressedData.size} bytes) 📦📦📦")
                 sendChunkedData(characteristic, compressedData)
             }
         } ?: run {
-            Log.e(TAG, "❌ targetCharacteristic이 null입니다")
+            Log.e(TAG, "❌❌❌ targetCharacteristic이 null입니다 ❌❌❌")
         }
     }
     
@@ -338,6 +389,160 @@ class BluetoothService(private val context: Context) {
             }, 10)
         } else {
             Log.e(TAG, "❌ 청크 ${index + 1} 전송 실패")
+        }
+    }
+    
+    // MARK: - 고속 최적화된 전송 메서드들
+    
+    /**
+     * 단일 패킷 최적화 전송 (Write Without Response)
+     */
+    private fun sendSinglePacketOptimized(characteristic: BluetoothGattCharacteristic, data: ByteArray) {
+        Log.d(TAG, "🚀🚀🚀 sendSinglePacketOptimized 시작 - ${data.size} bytes 🚀🚀🚀")
+        
+        characteristic.value = data
+        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE // 응답 대기 없음
+        
+        Log.d(TAG, "📤 전송할 데이터: ${String(data, Charsets.UTF_8).take(100)}...")
+        Log.d(TAG, "📤 Raw 데이터: ${data.map { String.format("%02x", it) }.take(20).joinToString(" ")}...")
+        
+        val success = bluetoothGatt?.writeCharacteristic(characteristic) ?: false
+        if (success) {
+            Log.d(TAG, "🚀🚀🚀 고속 단일 패킷 전송 성공! 🚀🚀🚀")
+        } else {
+            Log.e(TAG, "❌❌❌ 고속 단일 패킷 전송 실패! ❌❌❌")
+        }
+    }
+    
+    /**
+     * 고속 병렬 청크 전송
+     */
+    private fun sendOptimizedChunkedData(characteristic: BluetoothGattCharacteristic, data: ByteArray) {
+        val messageId = UUID.randomUUID().toString()
+        val chunks = createOrderedChunks(data, messageId)
+        val checksum = calculateChecksum(data)
+        
+        // 재전송을 위한 정보 저장
+        pendingTransmission = PendingTransmission(data, chunks, checksum, messageId)
+        sentChunks.clear()
+        retryCount = 0
+        
+        Log.d(TAG, "📦 고속 병렬 전송: ${chunks.size}개 청크, 체크섬: $checksum")
+        
+        // 병렬 전송 시작
+        sendParallelChunks(characteristic, chunks)
+    }
+    
+    /**
+     * 순서가 보장된 청크 생성
+     */
+    private fun createOrderedChunks(data: ByteArray, messageId: String): List<OrderedChunk> {
+        val chunkSize = currentMtu - 50 // 메타데이터를 위한 여유 공간
+        val chunks = mutableListOf<OrderedChunk>()
+        val totalChunks = (data.size + chunkSize - 1) / chunkSize // 올림 계산
+        
+        for (i in 0 until totalChunks) {
+            val start = i * chunkSize
+            val end = minOf(start + chunkSize, data.size)
+            val chunkData = data.sliceArray(start until end)
+            
+            chunks.add(OrderedChunk(i, totalChunks, chunkData, messageId))
+        }
+        
+        return chunks
+    }
+    
+    /**
+     * 체크섬 계산
+     */
+    private fun calculateChecksum(data: ByteArray): Long {
+        val crc32 = CRC32()
+        crc32.update(data)
+        return crc32.value
+    }
+    
+    /**
+     * 병렬 청크 전송
+     */
+    private fun sendParallelChunks(characteristic: BluetoothGattCharacteristic, chunks: List<OrderedChunk>) {
+        chunks.chunked(PARALLEL_CHUNK_SIZE).forEachIndexed { batchIndex, batch ->
+            batch.forEachIndexed { chunkIndex, chunk ->
+                val delay = batchIndex * PARALLEL_CHUNK_SIZE * OPTIMIZED_INTERVAL + chunkIndex * OPTIMIZED_INTERVAL
+                
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    sendOptimizedChunk(characteristic, chunk)
+                }, delay)
+            }
+        }
+        
+        // 전송 완료 확인 타이머
+        val totalDelay = chunks.size * OPTIMIZED_INTERVAL + 1000 // 1초 여유
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            checkTransmissionComplete()
+        }, totalDelay)
+    }
+    
+    /**
+     * 최적화된 청크 전송
+     */
+    private fun sendOptimizedChunk(characteristic: BluetoothGattCharacteristic, chunk: OrderedChunk) {
+        val chunkJson = gson.toJson(chunk)
+        val chunkData = chunkJson.toByteArray(Charsets.UTF_8)
+        
+        characteristic.value = chunkData
+        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        
+        val success = bluetoothGatt?.writeCharacteristic(characteristic) ?: false
+        if (success) {
+            sentChunks[chunk.index] = true
+            Log.d(TAG, "🚀 고속 청크 ${chunk.index + 1}/${chunk.total} 전송 완료")
+        } else {
+            Log.e(TAG, "❌ 고속 청크 ${chunk.index + 1} 전송 실패")
+        }
+    }
+    
+    /**
+     * 전송 완료 확인 및 재전송 로직
+     */
+    private fun checkTransmissionComplete() {
+        pendingTransmission?.let { transmission ->
+            val failedChunks = transmission.chunks.filter { !sentChunks.containsKey(it.index) || sentChunks[it.index] != true }
+            
+            if (failedChunks.isEmpty()) {
+                Log.d(TAG, "✅ 고속 전송 완전 성공!")
+                pendingTransmission = null
+                sentChunks.clear()
+            } else if (retryCount < MAX_RETRY_COUNT) {
+                retryCount++
+                Log.w(TAG, "⚠️ 재전송 시도 $retryCount/$MAX_RETRY_COUNT - 실패 청크: ${failedChunks.size}개")
+                
+                targetCharacteristic?.let { characteristic ->
+                    sendParallelChunks(characteristic, failedChunks)
+                }
+            } else {
+                Log.e(TAG, "❌ 최대 재전송 횟수 초과 - 전송 실패")
+                callback?.onError("전송 실패: 연결이 불안정합니다")
+                pendingTransmission = null
+                sentChunks.clear()
+                retryCount = 0
+            }
+        }
+    }
+    
+    // MARK: - 동기화 요청 처리
+    
+    /**
+     * Mac에서 온 동기화 요청 처리
+     */
+    private fun handleSyncRequest(jsonString: String) {
+        try {
+            Log.d(TAG, "🔄 동기화 요청 처리 중...")
+            
+            // 현재 클립보드 내용 즉시 전송
+            callback?.onSyncRequested()
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 동기화 요청 처리 실패", e)
         }
     }
 }

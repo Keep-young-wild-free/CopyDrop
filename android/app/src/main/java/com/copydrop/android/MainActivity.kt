@@ -122,17 +122,30 @@ class MainActivity : Activity() {
     
     override fun onResume() {
         super.onResume()
-        Log.d(TAG, "📱 앱 포그라운드 전환 (onResume)")
+        isAppInForeground = true
+        Log.d(TAG, "📱 앱이 포그라운드로 전환됨 - 양방향 동기화 활성화")
         
         // 스마트 폴링 재시작
         if (::clipboardService.isInitialized) {
             clipboardService.onAppForeground()
+            // 포그라운드 전환 시 즉시 클립보드 체크하여 Mac으로 동기화
+            if (isConnected) {
+                clipboardService.startActiveSync()
+            }
         }
+        
+        updateAccessibilityButton()
     }
     
     override fun onPause() {
         super.onPause()
-        Log.d(TAG, "📱 앱 백그라운드 전환 (onPause)")
+        isAppInForeground = false
+        Log.d(TAG, "📱 앱이 백그라운드로 전환됨 - 동기화 비활성화")
+        
+        // 백그라운드로 전환 시 능동적 동기화 중단
+        if (::clipboardService.isInitialized) {
+            clipboardService.stopActiveSync()
+        }
     }
     
     private fun initUI() {
@@ -278,6 +291,12 @@ class MainActivity : Activity() {
             }
         }
         
+        if (Build.VERSION.SDK_INT >= 33) { // Android 13 TIRAMISU
+            if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+                permissions.add("android.permission.POST_NOTIFICATIONS")
+            }
+        }
+        
         if (permissions.isNotEmpty()) {
             requestPermissions(permissions.toTypedArray(), LOCATION_PERMISSION_REQUEST_CODE)
         } else {
@@ -410,10 +429,10 @@ class MainActivity : Activity() {
             }
             
             if (!currentContent.isNullOrEmpty()) {
-                // 중복 전송 방지
+                // 중복 전송 방지 (자동 전송시만 적용, 수동은 항상 허용)
                 val currentTime = System.currentTimeMillis()
-                if (currentContent == lastSentContent && currentTime - lastSentTime < 2000) {
-                    Log.d(TAG, "⚠️ 중복 전송 방지: ${currentContent.take(30)}...")
+                if (isAutomatic && currentContent == lastSentContent && currentTime - lastSentTime < 500) {
+                    Log.d(TAG, "⚠️ 자동 중복 전송 방지 (500ms): ${currentContent.take(30)}...")
                     return
                 }
                 
@@ -463,10 +482,10 @@ class MainActivity : Activity() {
         }
         
         try {
-            // 중복 전송 방지
+            // 중복 전송 방지 (자동 전송시만 적용, 수동은 항상 허용)
             val currentTime = System.currentTimeMillis()
-            if (content == lastSentContent && currentTime - lastSentTime < 2000) {
-                Log.d(TAG, "⚠️ 중복 전송 방지: ${content.take(30)}...")
+            if (isAutomatic && content == lastSentContent && currentTime - lastSentTime < 500) {
+                Log.d(TAG, "⚠️ 자동 중복 전송 방지 (500ms): ${content.take(30)}...")
                 return
             }
             
@@ -692,6 +711,18 @@ class MainActivity : Activity() {
                 scanButton.isEnabled = true
             }
         }
+        
+        override fun onSyncRequested() {
+            runOnUiThread {
+                Log.d(TAG, "🔄 Mac에서 동기화 요청됨 - 즉시 클립보드 전송")
+                
+                if (isConnected) {
+                    sendCurrentClipboard(isAutomatic = true)
+                } else {
+                    Log.w(TAG, "⚠️ 동기화 요청 받았지만 연결되지 않은 상태")
+                }
+            }
+        }
     }
     
     private val clipboardListener = object : ClipboardService.ClipboardChangeListener {
@@ -718,19 +749,6 @@ class MainActivity : Activity() {
         }
     }
     
-    override fun onResume() {
-        super.onResume()
-        isAppInForeground = true
-        Log.d(TAG, "📱 앱이 포그라운드로 전환됨 - 폴링 활성화")
-        
-        updateAccessibilityButton()
-    }
-    
-    override fun onPause() {
-        super.onPause()
-        isAppInForeground = false
-        Log.d(TAG, "📱 앱이 백그라운드로 전환됨 - 폴링 비활성화")
-    }
     
     override fun onDestroy() {
         super.onDestroy()

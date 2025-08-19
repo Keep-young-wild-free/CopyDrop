@@ -140,13 +140,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func createClipboardMenuItem(item: ClipboardItem, index: Int) -> NSMenuItem {
-        // 미리보기 텍스트 생성 (최대 50글자)
-        let preview = item.content.replacingOccurrences(of: "\n", with: " ")
-                                 .replacingOccurrences(of: "\t", with: " ")
-                                 .trimmingCharacters(in: .whitespacesAndNewlines)
+        let title: String
+        var menuImage: NSImage?
         
-        let truncated = preview.count > 50 ? String(preview.prefix(50)) + "..." : preview
-        let title = truncated.isEmpty ? "(빈 내용)" : truncated
+        // 콘텐츠 타입에 따른 제목 및 아이콘 설정
+        switch item.type {
+        case .image:
+            title = item.preview
+            // 이미지 미리보기 생성 (24x24 크기)
+            if let nsImage = item.nsImage {
+                menuImage = createThumbnail(from: nsImage, size: NSSize(width: 24, height: 24))
+            }
+            
+        case .text:
+            // 미리보기 텍스트 생성 (최대 50글자)
+            let preview = item.content.replacingOccurrences(of: "\n", with: " ")
+                                     .replacingOccurrences(of: "\t", with: " ")
+                                     .trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            let truncated = preview.count > 50 ? String(preview.prefix(50)) + "..." : preview
+            title = truncated.isEmpty ? "(빈 내용)" : truncated
+            
+            // 소스 표시 (원격에서 온 경우)
+            if item.source == .remote {
+                menuImage = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: "원격")
+                menuImage?.size = NSSize(width: 12, height: 12)
+            }
+        }
         
         // 키보드 단축키 (1-9, 0)
         let keyEquivalent = index < 9 ? String(index + 1) : (index == 9 ? "0" : "")
@@ -154,14 +174,52 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let menuItem = NSMenuItem(title: title, action: #selector(clipboardMenuItemSelected(_:)), keyEquivalent: keyEquivalent)
         menuItem.target = self
         menuItem.representedObject = item
+        menuItem.image = menuImage
         
-        // 소스 표시 (원격에서 온 경우)
-        if item.source == .remote {
-            menuItem.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: "원격")
-            menuItem.image?.size = NSSize(width: 12, height: 12)
+        // 10MB 이상 이미지일 때 빨간색 텍스트로 표시
+        if item.type == .image, 
+           let imageData = item.imageData,
+           imageData.count > 10 * 1024 * 1024 {
+            let attributedTitle = NSMutableAttributedString(string: title)
+            
+            // "WiFi 권장" 부분만 빨간색으로 설정
+            if let range = title.range(of: "(큰 용량, WiFi 권장)") {
+                let nsRange = NSRange(range, in: title)
+                attributedTitle.addAttribute(.foregroundColor, value: NSColor.systemRed, range: nsRange)
+            }
+            
+            menuItem.attributedTitle = attributedTitle
         }
         
         return menuItem
+    }
+    
+    /**
+     * 이미지에서 썸네일 생성
+     */
+    private func createThumbnail(from image: NSImage, size: NSSize) -> NSImage {
+        let thumbnail = NSImage(size: size)
+        thumbnail.lockFocus()
+        
+        // 비율 유지하면서 크기 조정
+        let imageSize = image.size
+        let aspectRatio = imageSize.width / imageSize.height
+        
+        var drawRect: NSRect
+        if aspectRatio > 1 {
+            // 가로가 더 긴 경우
+            let newHeight = size.width / aspectRatio
+            drawRect = NSRect(x: 0, y: (size.height - newHeight) / 2, width: size.width, height: newHeight)
+        } else {
+            // 세로가 더 긴 경우
+            let newWidth = size.height * aspectRatio
+            drawRect = NSRect(x: (size.width - newWidth) / 2, y: 0, width: newWidth, height: size.height)
+        }
+        
+        image.draw(in: drawRect)
+        thumbnail.unlockFocus()
+        
+        return thumbnail
     }
     
     private func addBottomMenuItems(to menu: NSMenu) {
@@ -195,11 +253,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func clipboardMenuItemSelected(_ sender: NSMenuItem) {
         guard let item = sender.representedObject as? ClipboardItem else { return }
         
-        // 클립보드에 복사
+        // 클립보드에 복사 (타입에 따라 다르게 처리)
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(item.content, forType: .string)
         
-        print("클립보드에 복사됨: \(item.content.prefix(30))...")
+        switch item.type {
+        case .image:
+            if let imageData = item.imageData, let image = NSImage(data: imageData) {
+                NSPasteboard.general.writeObjects([image])
+                print("🖼️ 이미지가 클립보드에 복사됨: \(item.preview)")
+            } else {
+                print("❌ 이미지 데이터를 찾을 수 없음")
+            }
+            
+        case .text:
+            NSPasteboard.general.setString(item.content, forType: .string)
+            print("📝 텍스트가 클립보드에 복사됨: \(item.content.prefix(30))...")
+        }
     }
     
     @objc func clearClipboardHistory() {

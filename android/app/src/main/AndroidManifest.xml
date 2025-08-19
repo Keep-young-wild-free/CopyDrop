@@ -18,6 +18,9 @@
     <!-- 플로팅 윈도우 권한 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     
+    <!-- 알림 권한 (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    
     <!-- BLE 기능 필수 -->
     <uses-feature
         android:name="android.hardware.bluetooth_le"

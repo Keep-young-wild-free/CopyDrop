@@ -62,7 +62,7 @@ class BluetoothManager: NSObject, ObservableObject {
     private let deviceId: String
     
     // 하이브리드 통신을 위한 임계값
-    private static let BLE_SIZE_THRESHOLD = 400 * 1024 // 400KB
+    private static let BLE_SIZE_THRESHOLD = 10 * 1024 * 1024 // 10MB로 변경 (고속 전송 최적화 적용)
     
     // gzip 압축/해제 함수들
     private func compressData(_ data: Data) -> Data? {
@@ -279,12 +279,13 @@ class BluetoothManager: NSObject, ObservableObject {
     
     // MARK: - 데이터 수신 처리
     private func handleReceivedData(_ data: Data) {
+        print("🔍🔍🔍 handleReceivedData 호출됨 - \(data.count) bytes 🔍🔍🔍")
         let currentTime = Date()
         
         // 새로운 데이터 시작인지 확인 (1초 이상 간격이 있으면 새 데이터로 간주)
         if currentTime.timeIntervalSince(lastDataTime) > 1.0 {
             dataBuffer = Data()
-            print("🔄 새로운 데이터 수신 시작")
+            print("🔄🔄🔄 새로운 데이터 수신 시작 🔄🔄🔄")
         }
         
         // 데이터를 버퍼에 추가
@@ -292,52 +293,106 @@ class BluetoothManager: NSObject, ObservableObject {
         lastDataTime = currentTime
         
         let bufferString = String(data: dataBuffer, encoding: .utf8) ?? "Invalid UTF-8"
-        print("📥 누적 데이터 (\(dataBuffer.count) bytes): \(bufferString.prefix(100))...")
+        print("📥📥📥 누적 데이터 (\(dataBuffer.count) bytes): \(bufferString.prefix(200))... 📥📥📥")
+        print("📥 Raw 데이터: \(data.map { String(format: "%02x", $0) }.joined(separator: " "))")
         
         // 완전한 JSON인지 확인 (시작과 끝 브레이스가 모두 있는지)
         let openBraces = bufferString.filter { $0 == "{" }.count
         let closeBraces = bufferString.filter { $0 == "}" }.count
         
+        print("🔍 JSON 분석: 열린괄호=\(openBraces), 닫힌괄호=\(closeBraces)")
+        
         if openBraces > 0 && openBraces == closeBraces {
             // 완전한 JSON이 조합됨
-            print("✅ 완전한 JSON 조합됨: \(bufferString)")
+            print("✅✅✅ 완전한 JSON 조합됨! 처리 시작 ✅✅✅")
+            print("✅ JSON 내용: \(bufferString)")
             processCompleteJson(dataBuffer)
             dataBuffer = Data() // 버퍼 초기화
         } else {
-            print("⏳ JSON 조합 대기 중... (열린괄호: \(openBraces), 닫힌괄호: \(closeBraces))")
+            print("⏳⏳⏳ JSON 조합 대기 중... (열린괄호: \(openBraces), 닫힌괄호: \(closeBraces)) ⏳⏳⏳")
         }
     }
     
     private func processCompleteJson(_ data: Data) {
+        print("🚀🚀🚀 processCompleteJson 시작 - \(data.count) bytes 🚀🚀🚀")
+        
         do {
             // 먼저 압축 해제 시도
             var finalData = data
             if let decompressedData = decompressData(data) {
-                print("📥 압축 해제 성공: \(data.count) -> \(decompressedData.count) bytes")
+                print("📥📥📥 압축 해제 성공: \(data.count) -> \(decompressedData.count) bytes 📥📥📥")
                 finalData = decompressedData
             } else {
-                print("📥 압축 해제 실패 또는 비압축 데이터, 원본 사용")
+                print("📥📥📥 압축 해제 실패 또는 비압축 데이터, 원본 사용 📥📥📥")
             }
+            
+            let jsonString = String(data: finalData, encoding: .utf8) ?? "Invalid UTF-8"
+            print("🔍🔍🔍 JSON 디코딩 시도: \(jsonString) 🔍🔍🔍")
             
             let message = try JSONDecoder().decode(ClipboardMessage.self, from: finalData)
             
+            print("✅✅✅ JSON 디코딩 성공! ✅✅✅")
+            print("✅ DeviceId: \(message.deviceId) (내 ID: \(deviceId))")
+            print("✅ Content: \(message.content.prefix(100))...")
+            print("✅ ContentType: \(message.contentType)")
+            
             // 자신이 보낸 메시지는 무시
             guard message.deviceId != deviceId else { 
-                print("자신이 보낸 메시지 무시: \(message.deviceId)")
+                print("⚠️⚠️⚠️ 자신이 보낸 메시지 무시: \(message.deviceId) ⚠️⚠️⚠️")
                 return 
             }
             
-            print("✅ 메시지 수신 성공: \(message.content.prefix(30))...")
+            print("🎉🎉🎉 Android에서 클립보드 메시지 수신 성공! 🎉🎉🎉")
+            print("🎉 내용: \(message.content.prefix(50))...")
             
             // ClipboardManager에 전달
             DispatchQueue.main.async {
+                print("📋📋📋 ClipboardManager로 전달 중... 📋📋📋")
                 ClipboardManager.shared.receiveFromRemoteDevice(message.content)
+                print("📋📋📋 ClipboardManager 전달 완료! 📋📋📋")
             }
             
         } catch {
             let jsonString = String(data: data, encoding: .utf8) ?? "Invalid UTF-8"
-            print("❌ JSON 디코딩 실패: \(error)")
+            print("❌❌❌ JSON 디코딩 실패: \(error) ❌❌❌")
             print("❌ 원본 데이터: \(jsonString)")
+            print("❌ 데이터 길이: \(data.count) bytes")
+        }
+    }
+    
+    // MARK: - 동기화 요청
+    
+    /**
+     * Android에게 클립보드 동기화 요청
+     */
+    func requestSyncFromAndroid() {
+        guard isConnected, !connectedDevices.isEmpty else {
+            print("⚠️ 연결된 Android 기기가 없습니다")
+            return
+        }
+        
+        print("🔄 Android에게 클립보드 동기화 요청")
+        
+        let syncRequest = [
+            "type": "sync_request",
+            "deviceId": deviceId,
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "messageId": UUID().uuidString
+        ]
+        
+        do {
+            let data = try JSONSerialization.data(withJSONObject: syncRequest, options: [])
+            
+            if let characteristic = characteristic {
+                let success = peripheralManager?.updateValue(data, for: characteristic, onSubscribedCentrals: nil) ?? false
+                if success {
+                    print("✅ 동기화 요청 전송 성공")
+                } else {
+                    print("❌ 동기화 요청 전송 실패")
+                }
+            }
+        } catch {
+            print("❌ 동기화 요청 인코딩 실패: \(error)")
         }
     }
     
@@ -403,19 +458,20 @@ extension BluetoothManager: CBPeripheralManagerDelegate {
     }
     
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
-        print("📥 BLE Write 요청 수신: \(requests.count)개")
+        print("🔔🔔🔔 BLE Write 요청 수신: \(requests.count)개 🔔🔔🔔")
         
         for request in requests {
             if let value = request.value {
                 let jsonString = String(data: value, encoding: .utf8) ?? "Invalid UTF-8"
-                print("📥 Android에서 수신: \(value.count) bytes")
-                print("📥 데이터: \(jsonString.prefix(100))...")
+                print("📥📥📥 Android에서 수신: \(value.count) bytes 📥📥📥")
+                print("📥 데이터: \(jsonString.prefix(200))...")
+                print("📥 Raw 데이터: \(value.map { String(format: "%02x", $0) }.joined(separator: " "))")
                 
                 handleReceivedData(value)
                 peripheral.respond(to: request, withResult: .success)
-                print("✅ Write 요청 응답 완료")
+                print("✅✅✅ Write 요청 응답 완료 ✅✅✅")
             } else {
-                print("❌ Write 요청에 데이터 없음")
+                print("❌❌❌ Write 요청에 데이터 없음 ❌❌❌")
                 peripheral.respond(to: request, withResult: .invalidAttributeValueLength)
             }
         }

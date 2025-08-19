@@ -80,62 +80,106 @@ class ClipboardManager: ObservableObject {
         isSmartPollingStopped = false
         print("🔍 클립보드 변경 감지됨 (changeCount: \(lastChangeCount) → \(currentChangeCount)) - 스마트 폴링 카운터 리셋")
         
-        // 클립보드 내용 읽기 시도
-        let newContent = pasteboard.string(forType: .string)
-        print("📄 클립보드 내용 읽기 - 성공: \(newContent != nil), 비어있음: \(newContent?.isEmpty ?? true)")
+        // 클립보드 내용 읽기 시도 (이미지 우선, 텍스트 차순)
+        var clipboardItem: ClipboardItem?
         
-        guard let content = newContent, !content.isEmpty, content != lastContent else {
-            print("⚠️ 클립보드 내용 무시 - 비어있거나 이전과 동일")
+        // 1. 이미지 확인
+        if let imageData = getImageFromPasteboard(pasteboard) {
+            print("🖼️ 이미지 클립보드 감지 - 크기: \(imageData.count / 1024) KB")
+            // 고유한 content 생성 (타임스탬프 + 데이터 해시)
+            let timestamp = Date()
+            let dataHash = imageData.hashValue
+            let content = "Image_\(timestamp.timeIntervalSince1970)_\(dataHash)"
+            
+            clipboardItem = ClipboardItem(
+                content: content,
+                timestamp: timestamp,
+                source: .local,
+                type: .image,
+                imageData: imageData
+            )
+        }
+        // 2. 텍스트 확인
+        else if let textContent = pasteboard.string(forType: .string), !textContent.isEmpty {
+            print("📄 텍스트 클립보드 감지")
+            guard textContent != lastContent else {
+                print("⚠️ 클립보드 텍스트 무시 - 이전과 동일")
+                lastChangeCount = currentChangeCount
+                return
+            }
+            clipboardItem = ClipboardItem(
+                content: textContent,
+                timestamp: Date(),
+                source: .local,
+                type: .text
+            )
+            lastContent = textContent
+        }
+        else {
+            print("⚠️ 클립보드 내용 무시 - 지원하지 않는 형식이거나 비어있음")
             lastChangeCount = currentChangeCount
             return
         }
         
-        print("✅ 새로운 클립보드 내용 확인: \(content.prefix(30))...")
+        guard let newItem = clipboardItem else { return }
         
-        // 콘텐츠 필터링 검사
-        if settings.shouldFilterContent(content) {
-            print("콘텐츠 필터링으로 인해 동기화 차단: \(content.prefix(30))...")
+        print("✅ 새로운 클립보드 내용 확인: \(newItem.preview)")
+        
+        // 텍스트인 경우에만 콘텐츠 필터링 검사
+        if newItem.type == .text && settings.shouldFilterContent(newItem.content) {
+            print("콘텐츠 필터링으로 인해 동기화 차단: \(newItem.content.prefix(30))...")
             lastChangeCount = currentChangeCount
-            lastContent = content
             return
         }
         
         lastChangeCount = currentChangeCount
-        lastContent = content
         
-        // AirDrop 수신 감지 (특정 패턴으로 감지)
-        let isFromAirDrop = detectAirDropContent(content)
+        // AirDrop 수신 감지 (텍스트인 경우에만)
+        let isFromAirDrop = newItem.type == .text ? detectAirDropContent(newItem.content) : false
         
-        // 새로운 클립보드 아이템 생성
-        let newItem = ClipboardItem(
-            content: content,
-            timestamp: Date(),
-            source: isFromAirDrop ? .remote : .local
-        )
+        // AirDrop인 경우 소스 업데이트
+        let finalItem = isFromAirDrop ? ClipboardItem(
+            content: newItem.content,
+            timestamp: newItem.timestamp,
+            source: .remote,
+            type: newItem.type,
+            imageData: newItem.imageData
+        ) : newItem
         
         // AirDrop 수신 알림
         if isFromAirDrop {
-            NotificationManager.shared.sendAirdropReceiveNotification(content: content)
+            NotificationManager.shared.sendAirdropReceiveNotification(content: finalItem.content)
         } else {
             // 로컬 복사 푸시 알림 전송
-            NotificationManager.shared.sendLocalCopyNotification(content: content)
+            NotificationManager.shared.sendLocalCopyNotification(content: finalItem.content)
         }
         
         DispatchQueue.main.async {
-            print("📝 히스토리 저장 시도: \(content.prefix(30))...")
+            print("📝 히스토리 저장 시도: \(finalItem.preview)")
             
             // 히스토리 저장이 활성화된 경우에만 저장
             if self.settings.isHistoryEnabled {
                 print("✅ 히스토리 저장 활성화됨")
                 
                 // 중복 제거 (같은 내용이 연속으로 나오는 경우)
-                if let lastItem = self.history.first,
-                   lastItem.content == content {
-                    print("⚠️ 중복 내용 - 히스토리에 추가하지 않음")
-                    return
+                if let lastItem = self.history.first {
+                    let isDuplicate: Bool
+                    
+                    if finalItem.type == .image && lastItem.type == .image {
+                        // 이미지의 경우 실제 데이터를 비교
+                        isDuplicate = finalItem.imageData == lastItem.imageData
+                    } else {
+                        // 텍스트의 경우 내용을 비교
+                        isDuplicate = lastItem.content == finalItem.content && lastItem.type == finalItem.type
+                    }
+                    
+                    if isDuplicate {
+                        print("⚠️ 중복 내용 - 히스토리에 추가하지 않음")
+                        return
+                    }
                 }
                 
-                self.history.insert(newItem, at: 0)
+                self.history.insert(finalItem, at: 0)
                 print("✅ 히스토리에 추가됨 - 총 \(self.history.count)개 항목")
                 
                 // 설정된 최대 개수까지만 유지
@@ -150,9 +194,9 @@ class ClipboardManager: ObservableObject {
             print("🎯 현재 히스토리 항목 수: \(self.history.count)")
         }
         
-        // 블루투스로 다른 기기에 전송 (로컬 복사인 경우에만)
-        if !isFromAirDrop {
-            BluetoothManager.shared.sendToConnectedDevices(content: content)
+        // 블루투스로 다른 기기에 전송 (로컬 복사이고 텍스트인 경우에만)
+        if !isFromAirDrop && finalItem.type == .text {
+            BluetoothManager.shared.sendToConnectedDevices(content: finalItem.content)
         }
     }
     
@@ -222,13 +266,16 @@ class ClipboardManager: ObservableObject {
     }
     
     /**
-     * 앱 포그라운드 전환 시 스마트 폴링 재시작
+     * 앱 포그라운드 전환 시 스마트 폴링 재시작 및 Android 동기화 요청
      */
     func onAppForeground() {
         if isSmartPollingStopped {
             print("🔄 앱 포그라운드 전환 - 스마트 폴링 재시작")
             resumeSmartPolling()
         }
+        
+        // Android에게 클립보드 동기화 요청
+        BluetoothManager.shared.requestSyncFromAndroid()
     }
     
     // MARK: - AirDrop 감지
@@ -254,5 +301,70 @@ class ClipboardManager: ObservableObject {
         }
         
         return false
+    }
+    
+    // MARK: - 이미지 클립보드 처리
+    
+    /**
+     * 클립보드에서 이미지 데이터 추출
+     */
+    private func getImageFromPasteboard(_ pasteboard: NSPasteboard) -> Data? {
+        // 지원하는 이미지 타입들
+        let imageTypes: [NSPasteboard.PasteboardType] = [
+            .tiff, .png, .pdf, .fileURL
+        ]
+        
+        for type in imageTypes {
+            if let data = pasteboard.data(forType: type) {
+                // TIFF 데이터인 경우 PNG로 변환
+                if type == .tiff {
+                    if let image = NSImage(data: data),
+                       let pngData = convertImageToPNG(image) {
+                        print("✅ TIFF 이미지를 PNG로 변환 성공")
+                        return pngData
+                    }
+                }
+                // PNG, PDF 등은 그대로 사용
+                else if type == .png || type == .pdf {
+                    print("✅ \(type.rawValue) 이미지 데이터 추출 성공")
+                    return data
+                }
+                // 파일 URL인 경우 이미지 파일인지 확인
+                else if type == .fileURL,
+                        let url = URL(dataRepresentation: data, relativeTo: nil),
+                        isImageFile(url: url) {
+                    do {
+                        let imageData = try Data(contentsOf: url)
+                        print("✅ 이미지 파일에서 데이터 추출 성공: \(url.lastPathComponent)")
+                        return imageData
+                    } catch {
+                        print("❌ 이미지 파일 읽기 실패: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+        
+        return nil
+    }
+    
+    /**
+     * NSImage를 PNG 데이터로 변환
+     */
+    private func convertImageToPNG(_ image: NSImage) -> Data? {
+        guard let tiffData = image.tiffRepresentation,
+              let bitmapImage = NSBitmapImageRep(data: tiffData) else {
+            return nil
+        }
+        
+        return bitmapImage.representation(using: .png, properties: [:])
+    }
+    
+    /**
+     * URL이 이미지 파일인지 확인
+     */
+    private func isImageFile(url: URL) -> Bool {
+        let imageExtensions = ["png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "webp"]
+        let fileExtension = url.pathExtension.lowercased()
+        return imageExtensions.contains(fileExtension)
     }
 }
