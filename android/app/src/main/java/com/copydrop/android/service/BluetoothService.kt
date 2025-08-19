@@ -48,11 +48,17 @@ class BluetoothService(private val context: Context) {
         private val CHARACTERISTIC_UUID = UUID.fromString("00002101-0000-1000-8000-00805F9B34FB")
         private const val SERVICE_NAME = "CopyDropService"
         
-        private const val BLE_SIZE_THRESHOLD = 10 * 1024 * 1024 // 10MB로 변경 (고속 전송 최적화 적용)
+        // 하이브리드 통신을 위한 크기 제한
+        private const val IMAGE_BLE_LIMIT = 200 * 1024 // 200KB - BLE로 전송 가능한 이미지 크기
+        private const val WIFI_THRESHOLD = 100 * 1024 // 100KB - Wi-Fi 기능 있을 때 Wi-Fi로 전환하는 크기
         private const val IMAGE_PATTERN = "^data:image/[a-zA-Z]*;base64,"
         private const val MAX_RETRY_COUNT = 3 // 최대 재전송 횟수
         private const val PARALLEL_CHUNK_SIZE = 4 // 동시 전송 청크 수
         private const val OPTIMIZED_INTERVAL = 5L // 최적화된 전송 간격 (ms)
+        
+        // 데이터 타입 헤더
+        private const val TEXT_HEADER = "[TXT]"
+        private const val IMAGE_HEADER = "[IMG]"
     }
     
     // 재전송을 위한 데이터 클래스
@@ -71,20 +77,7 @@ class BluetoothService(private val context: Context) {
         val messageId: String
     )
     
-    // gzip 압축/해제 함수들
-    private fun compressData(data: String): ByteArray {
-        val bos = ByteArrayOutputStream()
-        val gzip = GZIPOutputStream(bos)
-        gzip.write(data.toByteArray(Charsets.UTF_8))
-        gzip.close()
-        return bos.toByteArray()
-    }
-    
-    private fun decompressData(compressedData: ByteArray): String {
-        val bis = ByteArrayInputStream(compressedData)
-        val gzip = GZIPInputStream(bis)
-        return gzip.readBytes().toString(Charsets.UTF_8)
-    }
+    // 압축 함수 제거됨 (하이브리드 통신에서는 텍스트/이미지 구분해서 처리)
     
     // 콘텐츠 타입 감지
     private fun detectContentType(content: String): String {
@@ -95,18 +88,34 @@ class BluetoothService(private val context: Context) {
         }
     }
     
-    // 전송 방식 결정
+    // 전송 방식 결정 (하이브리드)
     private fun shouldUseWiFi(content: String, contentType: String): Boolean {
         val sizeBytes = content.toByteArray(Charsets.UTF_8).size
-        return when {
-            // 이미지: 500KB 이상 시 Wi-Fi 권장
-            contentType == "image" && sizeBytes > BLE_SIZE_THRESHOLD -> true
-            // 파일: 경로만 전송하므로 BLE 사용
-            contentType == "file" && sizeBytes > BLE_SIZE_THRESHOLD -> true
-            // 일반 텍스트: 500KB 이상 시 Wi-Fi 권장  
-            contentType == "text" && sizeBytes > BLE_SIZE_THRESHOLD -> true
+        
+        return when (contentType) {
+            "image" -> {
+                when {
+                    sizeBytes > IMAGE_BLE_LIMIT -> {
+                        Log.i(TAG, "🌐 이미지가 BLE 한계 초과 (${sizeBytes / 1024}KB > 200KB)")
+                        true
+                    }
+                    // Wi-Fi 기능이 있고 100KB 이상인 경우 Wi-Fi 권장
+                    hasWiFiCapability() && sizeBytes > WIFI_THRESHOLD -> {
+                        Log.i(TAG, "📶 Wi-Fi 사용 권장 (${sizeBytes / 1024}KB > 100KB)")
+                        true
+                    }
+                    else -> false
+                }
+            }
+            "text" -> sizeBytes > IMAGE_BLE_LIMIT // 텍스트도 200KB 넘으면 Wi-Fi
             else -> false
         }
+    }
+    
+    // Wi-Fi 기능 여부 확인 (나중에 구현)
+    private fun hasWiFiCapability(): Boolean {
+        // TODO: Wi-Fi 기능 구현 시 true 반환
+        return false
     }
     
     // 콜백 인터페이스
@@ -117,6 +126,12 @@ class BluetoothService(private val context: Context) {
         fun onMessageReceived(message: ClipboardMessage)
         fun onError(error: String)
         fun onSyncRequested() // Mac에서 동기화 요청 시
+        
+        // 이미지 전송 관련 콜백
+        fun onImageTransferStarted(sizeKB: Int) // 이미지 전송 시작 (스피너 시작)
+        fun onImageTransferProgress(progress: Int) // 전송 진행률 (0-100)
+        fun onImageTransferCompleted() // 이미지 전송 완료 (스피너 제거)
+        fun onImageTransferFailed(error: String) // 이미지 전송 실패
     }
     
     private var callback: BluetoothServiceCallback? = null
@@ -258,36 +273,44 @@ class BluetoothService(private val context: Context) {
                 Log.d(TAG, "📥 Mac에서 데이터 수신: ${receivedData.size} bytes")
                 
                 try {
-                    val rawJsonString = String(receivedData, Charsets.UTF_8)
+                    // 하이브리드 데이터로 수신
+                    val rawContent = String(receivedData, Charsets.UTF_8)
                     
-                    // 먼저 압축되지 않은 동기화 요청인지 확인
-                    if (rawJsonString.contains("\"type\":\"sync_request\"")) {
-                        Log.d(TAG, "🔄 Mac에서 동기화 요청 수신")
-                        handleSyncRequest(rawJsonString)
-                        return
+                    Log.d(TAG, "📥 Mac에서 하이브리드 데이터 수신: ${rawContent.take(100)}...")
+                    
+                    // 헤더 확인하여 타입 구분
+                    val (cleanContent, contentType) = when {
+                        rawContent.startsWith(TEXT_HEADER) -> {
+                            // [TXT] 헤더 제거
+                            val content = rawContent.removePrefix(TEXT_HEADER)
+                            Log.d(TAG, "📝 텍스트 데이터 감지 (헤더 제거): ${content.take(50)}...")
+                            Pair(content, "text")
+                        }
+                        rawContent.startsWith(IMAGE_HEADER) -> {
+                            // [IMG] 헤더 제거
+                            val content = rawContent.removePrefix(IMAGE_HEADER)
+                            Log.d(TAG, "🖼️ 이미지 데이터 감지 (헤더 제거): ${content.take(50)}...")
+                            Pair(content, "image")
+                        }
+                        else -> {
+                            // 헤더 없는 경우 (기존 호환성)
+                            Log.d(TAG, "📝 헤더 없는 데이터를 텍스트로 처리: ${rawContent.take(50)}...")
+                            Pair(rawContent, "text")
+                        }
                     }
                     
-                    // 압축 해제 시도, 실패하면 원본 사용
-                    val jsonString = try {
-                        val decompressed = decompressData(receivedData)
-                        Log.d(TAG, "📥 압축 해제 성공: ${decompressed.take(100)}...")
-                        decompressed
-                    } catch (e: Exception) {
-                        Log.d(TAG, "📥 압축 해제 실패, 원본 데이터 사용: ${rawJsonString.take(100)}...")
-                        rawJsonString
-                    }
+                    // ClipboardMessage 객체 생성
+                    val message = ClipboardMessage(
+                        content = cleanContent,
+                        deviceId = "mac-device",
+                        contentType = contentType
+                    )
                     
-                    val message = gson.fromJson(jsonString, ClipboardMessage::class.java)
+                    Log.d(TAG, "✅✅✅ Mac에서 ${contentType} 수신 완료: ${cleanContent.take(30)}... ✅✅✅")
+                    callback?.onMessageReceived(message)
                     
-                    // 자신이 보낸 메시지는 무시
-                    if (message.deviceId != deviceId) {
-                        Log.d(TAG, "✅✅✅ Mac에서 메시지 수신 완료: ${message.content.take(30)}... ✅✅✅")
-                        callback?.onMessageReceived(message)
-                    } else {
-                        Log.d(TAG, "자신이 보낸 메시지 무시: ${message.deviceId}")
-                    }
                 } catch (e: Exception) {
-                    Log.e(TAG, "❌❌❌ JSON 파싱 실패 ❌❌❌", e)
+                    Log.e(TAG, "❌❌❌ 텍스트 처리 실패 ❌❌❌", e)
                 }
             }
         }
@@ -317,36 +340,67 @@ class BluetoothService(private val context: Context) {
         }
         
         targetCharacteristic?.let { characteristic ->
-            Log.d(TAG, "📤📤📤 targetCharacteristic 확인됨, 메시지 구성 시작 📤📤📤")
+            val contentType = detectContentType(content)
+            val sizeBytes = content.toByteArray(Charsets.UTF_8).size
+            val sizeKB = sizeBytes / 1024
             
-            val message = ClipboardMessage(content, deviceId, contentType)
-            val jsonString = gson.toJson(message)
+            Log.d(TAG, "📤📤📤 하이브리드 전송 시작 - 타입: $contentType, 크기: ${sizeKB}KB 📤📤📤")
             
-            Log.d(TAG, "📤 JSON 메시지: $jsonString")
-            Log.d(TAG, "📤 DeviceId: $deviceId")
-            Log.d(TAG, "📤 ContentType: $contentType")
-            
-            // gzip 압축 적용
-            val originalData = jsonString.toByteArray(Charsets.UTF_8)
-            val compressedData = compressData(jsonString)
-            val compressionRatio = (1 - compressedData.size.toFloat() / originalData.size) * 100
-            
-            Log.d(TAG, "📤📤📤 고속 전송 모드 시작 ($contentType): ${content.take(30)}... 📤📤📤")
-            Log.d(TAG, "📤 원본 크기: ${originalData.size} bytes")
-            Log.d(TAG, "📤 압축 후: ${compressedData.size} bytes (${String.format("%.1f", compressionRatio)}% 압축)")
-            Log.d(TAG, "📤 MTU: $currentMtu bytes")
-            
-            if (compressedData.size <= currentMtu) {
-                // MTU 크기 이내: 단일 패킷 전송
-                Log.d(TAG, "📤📤📤 단일 패킷 전송 시작 (${compressedData.size} bytes) 📤📤📤")
-                sendSinglePacketOptimized(characteristic, compressedData)
+            if (contentType == "text") {
+                // 텍스트: 순수 텍스트 전송 (헤더 포함)
+                sendTextData(characteristic, content)
+            } else if (contentType == "image") {
+                // 이미지: 압축 + JSON 전송 (헤더 포함)
+                sendImageData(characteristic, content, sizeKB)
             } else {
-                // MTU 초과: 순차 청크 전송 (병렬 아님)
-                Log.d(TAG, "📦📦📦 순차 청크 전송 시작 (${compressedData.size} bytes) 📦📦📦")
-                sendChunkedData(characteristic, compressedData)
+                // 기타: 텍스트로 처리
+                sendTextData(characteristic, content)
             }
         } ?: run {
             Log.e(TAG, "❌❌❌ targetCharacteristic이 null입니다 ❌❌❌")
+        }
+    }
+    
+    // 텍스트 전송 (순수 텍스트 + 헤더)
+    private fun sendTextData(characteristic: BluetoothGattCharacteristic, content: String) {
+        val textWithHeader = TEXT_HEADER + content
+        val transmitData = textWithHeader.toByteArray(Charsets.UTF_8)
+        
+        Log.d(TAG, "📝 순수 텍스트 전송: ${content.take(50)}... (${transmitData.size} bytes)")
+        
+        if (transmitData.size <= currentMtu) {
+            sendSinglePacketOptimized(characteristic, transmitData)
+        } else {
+            sendChunkedData(characteristic, transmitData)
+        }
+    }
+    
+    // 이미지 전송 (헤더 + base64, 압축 없음)
+    private fun sendImageData(characteristic: BluetoothGattCharacteristic, content: String, sizeKB: Int) {
+        Log.d(TAG, "🖼️ 이미지 전송 시작: ${sizeKB}KB")
+        
+        // 진행률 콜백 (UI용)
+        callback?.onImageTransferStarted(sizeKB)
+        
+        try {
+            // 헤더 + base64 이미지 데이터 (압축 없음)
+            val imageWithHeader = IMAGE_HEADER + content
+            val transmitData = imageWithHeader.toByteArray(Charsets.UTF_8)
+            
+            Log.d(TAG, "📦 이미지 전송 데이터 크기: ${transmitData.size} bytes")
+            
+            if (transmitData.size <= currentMtu) {
+                // 단일 패킷으로 전송 가능
+                sendSinglePacketOptimized(characteristic, transmitData)
+                callback?.onImageTransferCompleted()
+                Log.d(TAG, "✅🖼️ 이미지 단일 패킷 전송 완료")
+            } else {
+                // 청크로 나누어 전송
+                sendChunkedDataWithProgress(characteristic, transmitData, sizeKB)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 이미지 전송 실패: ${e.message}")
+            callback?.onImageTransferFailed("이미지 처리 실패: ${e.message}")
         }
     }
     
@@ -367,6 +421,14 @@ class BluetoothService(private val context: Context) {
         Log.d(TAG, "📦 데이터를 ${chunks.size}개 청크로 분할")
         
         sendNextChunk(characteristic, chunks, 0)
+    }
+    
+    // 진행률과 함께 청크 전송 (이미지용)
+    private fun sendChunkedDataWithProgress(characteristic: BluetoothGattCharacteristic, data: ByteArray, sizeKB: Int) {
+        val chunks = data.toList().chunked(currentMtu)
+        Log.d(TAG, "📦🖼️ 이미지를 ${chunks.size}개 청크로 분할 (${sizeKB}KB)")
+        
+        sendNextChunkWithProgress(characteristic, chunks, 0, sizeKB)
     }
     
     private fun sendNextChunk(characteristic: BluetoothGattCharacteristic, chunks: List<List<Byte>>, index: Int) {
@@ -392,6 +454,36 @@ class BluetoothService(private val context: Context) {
         }
     }
     
+    // 진행률과 함께 청크 전송 (이미지용)
+    private fun sendNextChunkWithProgress(characteristic: BluetoothGattCharacteristic, chunks: List<List<Byte>>, index: Int, sizeKB: Int) {
+        if (index >= chunks.size) {
+            Log.d(TAG, "✅🖼️ 이미지 전송 완료: ${sizeKB}KB")
+            callback?.onImageTransferCompleted()
+            return
+        }
+        
+        val chunk = chunks[index].toByteArray()
+        characteristic.value = chunk
+        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        
+        val success = bluetoothGatt?.writeCharacteristic(characteristic) ?: false
+        if (success) {
+            val progress = ((index + 1) * 100) / chunks.size
+            Log.d(TAG, "✅🖼️ 이미지 청크 ${index + 1}/${chunks.size} 전송 (${progress}%)")
+            
+            // 진행률 콜백
+            callback?.onImageTransferProgress(progress)
+            
+            // 다음 청크를 20ms 후에 전송 (이미지는 조금 더 느리게)
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                sendNextChunkWithProgress(characteristic, chunks, index + 1, sizeKB)
+            }, 20)
+        } else {
+            Log.e(TAG, "❌🖼️ 이미지 청크 ${index + 1} 전송 실패")
+            callback?.onImageTransferFailed("청크 ${index + 1} 전송 실패")
+        }
+    }
+    
     // MARK: - 고속 최적화된 전송 메서드들
     
     /**
@@ -401,7 +493,7 @@ class BluetoothService(private val context: Context) {
         Log.d(TAG, "🚀🚀🚀 sendSinglePacketOptimized 시작 - ${data.size} bytes 🚀🚀🚀")
         
         characteristic.value = data
-        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE // 응답 대기 없음
+        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT // Mac의 didReceiveWrite 콜백 활성화
         
         Log.d(TAG, "📤 전송할 데이터: ${String(data, Charsets.UTF_8).take(100)}...")
         Log.d(TAG, "📤 Raw 데이터: ${data.map { String.format("%02x", it) }.take(20).joinToString(" ")}...")
@@ -490,7 +582,7 @@ class BluetoothService(private val context: Context) {
         val chunkData = chunkJson.toByteArray(Charsets.UTF_8)
         
         characteristic.value = chunkData
-        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         
         val success = bluetoothGatt?.writeCharacteristic(characteristic) ?: false
         if (success) {

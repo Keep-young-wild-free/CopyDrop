@@ -4,7 +4,13 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.util.Base64
 import android.util.Log
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 
 /**
  * Android 클립보드 모니터링 및 관리
@@ -22,6 +28,8 @@ class ClipboardService(private val context: Context) {
     private var pollingHandler: android.os.Handler? = null
     private var pollingRunnable: Runnable? = null
     private var lastProcessedTime = 0L  // 중복 전송 방지용
+    private var lastRemoteContent = ""  // 원격에서 받은 마지막 콘텐츠 (무한 루프 방지용)
+    private var lastRemoteTime = 0L  // 원격 수신 시간
     
     // 스마트 폴링 관련 변수들
     private var noChangeCount = 0  // 연속으로 변경이 없었던 횟수
@@ -52,17 +60,28 @@ class ClipboardService(private val context: Context) {
         try {
             val clipData = clipboardManager.primaryClip
             if (clipData != null && clipData.itemCount > 0) {
-                val newContent = clipData.getItemAt(0).text?.toString() ?: ""
+                val clipItem = clipData.getItemAt(0)
                 
-                Log.d(TAG, "📋 현재 클립보드 내용: ${newContent.take(50)}...")
-                Log.d(TAG, "📋 이전 클립보드 내용: ${lastClipboardContent.take(50)}...")
+                // 1. 텍스트 우선 확인
+                val textContent = clipItem.text?.toString()
+                if (!textContent.isNullOrEmpty()) {
+                    Log.d(TAG, "📝 텍스트 클립보드 감지: ${textContent.take(50)}...")
+                    
+                    if (textContent != lastClipboardContent) {
+                        handleClipboardChange(textContent, "리스너")
+                        return@OnPrimaryClipChangedListener
+                    }
+                }
                 
-                // 빈 내용이거나 이전과 동일하면 무시
-                if (newContent.isNotEmpty() && newContent != lastClipboardContent) {
-                    handleClipboardChange(newContent, "리스너")
+                // 2. 이미지 확인
+                val uri = clipItem.uri
+                if (uri != null) {
+                    Log.d(TAG, "🖼️ 이미지 클립보드 감지: ${uri}")
+                    processImageFromUri(uri)
                 } else {
                     Log.d(TAG, "⏭️ 클립보드 변경 무시 (빈 내용 또는 중복)")
                 }
+                
             } else {
                 Log.d(TAG, "⚠️ 클립보드 데이터가 없거나 비어있음")
             }
@@ -82,6 +101,14 @@ class ClipboardService(private val context: Context) {
             return
         }
         
+        // 원격에서 받은 데이터를 다시 전송하지 않도록 확인 (무한 루프 방지)
+        if (newContent == lastRemoteContent && currentTime - lastRemoteTime < 3000) {
+            Log.d(TAG, "🔄 원격 데이터 재전송 방지 ($source): ${newContent.take(30)}...")
+            lastClipboardContent = newContent
+            lastProcessedTime = currentTime
+            return
+        }
+        
         lastClipboardContent = newContent
         lastProcessedTime = currentTime
         
@@ -92,6 +119,72 @@ class ClipboardService(private val context: Context) {
         
         // 자동 전송 콜백 (실제 전송 트리거)
         listener?.onClipboardChangedForAutoSend()
+    }
+    
+    // 이미지 처리 함수들
+    private fun processImageFromUri(uri: Uri) {
+        try {
+            Log.d(TAG, "🖼️ 이미지 처리 시작: $uri")
+            
+            val inputStream: InputStream? = context.contentResolver.openInputStream(uri)
+            if (inputStream == null) {
+                Log.e(TAG, "❌ 이미지 스트림 열기 실패")
+                return
+            }
+            
+            // 이미지를 Bitmap으로 로드
+            val bitmap = BitmapFactory.decodeStream(inputStream)
+            inputStream.close()
+            
+            if (bitmap == null) {
+                Log.e(TAG, "❌ 이미지 디코딩 실패")
+                return
+            }
+            
+            // 크기 확인
+            val sizeBytes = bitmap.byteCount
+            val sizeKB = sizeBytes / 1024
+            Log.d(TAG, "🖼️ 이미지 크기: ${sizeKB}KB")
+            
+            // 200KB 제한 확인
+            if (sizeKB > 200) {
+                Log.w(TAG, "⚠️ 이미지가 너무 큼: ${sizeKB}KB > 200KB")
+                handleClipboardChange("🖼️ 이미지가 너무 큽니다 (${sizeKB}KB). 200KB 이하만 지원됩니다.", "이미지 크기 초과")
+                return
+            }
+            
+            // base64로 변환
+            val base64String = imageToBase64(bitmap)
+            if (base64String != null) {
+                Log.d(TAG, "✅ 이미지 base64 변환 성공: ${base64String.length} characters")
+                handleClipboardChange(base64String, "이미지")
+            } else {
+                Log.e(TAG, "❌ 이미지 base64 변환 실패")
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 이미지 처리 중 오류: ${e.message}")
+        }
+    }
+    
+    private fun imageToBase64(bitmap: Bitmap): String? {
+        return try {
+            val outputStream = ByteArrayOutputStream()
+            
+            // PNG로 압축 (무손실)
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+            val imageBytes = outputStream.toByteArray()
+            
+            // base64 인코딩
+            val base64String = Base64.encodeToString(imageBytes, Base64.DEFAULT)
+            
+            // data URL 형식으로 변환
+            "data:image/png;base64,$base64String"
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ base64 변환 오류: ${e.message}")
+            null
+        }
     }
     
     fun startMonitoring() {
@@ -202,6 +295,10 @@ class ClipboardService(private val context: Context) {
     }
     
     fun setClipboardContent(content: String) {
+        // 원격에서 받은 데이터로 기록 (무한 루프 방지용)
+        lastRemoteContent = content
+        lastRemoteTime = System.currentTimeMillis()
+        
         // 강제로 메인 스레드에서 실행하고 앱을 포그라운드로 전환
         android.os.Handler(android.os.Looper.getMainLooper()).post {
             performClipboardAccess(content)

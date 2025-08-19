@@ -64,7 +64,7 @@ class BluetoothManager: NSObject, ObservableObject {
     // 하이브리드 통신을 위한 임계값
     private static let BLE_SIZE_THRESHOLD = 10 * 1024 * 1024 // 10MB로 변경 (고속 전송 최적화 적용)
     
-    // gzip 압축/해제 함수들
+    // gzip 압축/해제 함수들 (Android와 호환성을 위해 gzip 사용)
     private func compressData(_ data: Data) -> Data? {
         return data.withUnsafeBytes { bytes in
             let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: data.count)
@@ -73,7 +73,7 @@ class BluetoothManager: NSObject, ObservableObject {
             let compressedSize = compression_encode_buffer(
                 buffer, data.count,
                 bytes.bindMemory(to: UInt8.self).baseAddress!, data.count,
-                nil, COMPRESSION_LZFSE
+                nil, COMPRESSION_ZLIB
             )
             
             guard compressedSize > 0 else { return nil }
@@ -82,6 +82,71 @@ class BluetoothManager: NSObject, ObservableObject {
     }
     
     private func decompressData(_ compressedData: Data) -> Data? {
+        // Android GZIP 호환성을 위해 먼저 ZLIB 시도
+        if let zlibResult = tryDecompressZlib(compressedData) {
+            return zlibResult
+        }
+        
+        // 기존 LZFSE 방식도 유지 (Mac끼리 통신용)
+        return tryDecompressLZFSE(compressedData)
+    }
+    
+    private func tryDecompressZlib(_ compressedData: Data) -> Data? {
+        // GZIP 헤더가 있는 경우 LZFSE로 시도 (Apple Compression Framework의 GZIP 지원)
+        if compressedData.count >= 3 && compressedData[0] == 0x1f && compressedData[1] == 0x8b && compressedData[2] == 0x08 {
+            print("🗜️ GZIP 데이터를 Apple Compression Framework로 압축 해제 시도")
+            
+            // Apple Compression Framework를 사용한 GZIP 압축 해제
+            return compressedData.withUnsafeBytes { bytes in
+                let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: compressedData.count * 8) // 더 큰 버퍼
+                defer { buffer.deallocate() }
+                
+                // GZIP = ZLIB with different header/footer
+                let decompressedSize = compression_decode_buffer(
+                    buffer, compressedData.count * 8,
+                    bytes.bindMemory(to: UInt8.self).baseAddress!, compressedData.count,
+                    nil, COMPRESSION_LZFSE // LZFSE로 시도
+                )
+                
+                if decompressedSize > 0 {
+                    print("✅ GZIP->LZFSE 압축 해제 성공: \(compressedData.count) -> \(decompressedSize) bytes")
+                    return Data(bytes: buffer, count: decompressedSize)
+                }
+                
+                // LZFSE 실패 시 ZLIB 시도
+                let zlibSize = compression_decode_buffer(
+                    buffer, compressedData.count * 8,
+                    bytes.bindMemory(to: UInt8.self).baseAddress!, compressedData.count,
+                    nil, COMPRESSION_ZLIB
+                )
+                
+                if zlibSize > 0 {
+                    print("✅ GZIP->ZLIB 압축 해제 성공: \(compressedData.count) -> \(zlibSize) bytes")
+                    return Data(bytes: buffer, count: zlibSize)
+                }
+                
+                print("❌ GZIP 압축 해제 실패 - 모든 방법 시도함")
+                return nil
+            }
+        }
+        
+        // 일반 ZLIB 압축 해제
+        return compressedData.withUnsafeBytes { bytes in
+            let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: compressedData.count * 4)
+            defer { buffer.deallocate() }
+            
+            let decompressedSize = compression_decode_buffer(
+                buffer, compressedData.count * 4,
+                bytes.bindMemory(to: UInt8.self).baseAddress!, compressedData.count,
+                nil, COMPRESSION_ZLIB
+            )
+            
+            guard decompressedSize > 0 else { return nil }
+            return Data(bytes: buffer, count: decompressedSize)
+        }
+    }
+    
+    private func tryDecompressLZFSE(_ compressedData: Data) -> Data? {
         return compressedData.withUnsafeBytes { bytes in
             let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: compressedData.count * 4)
             defer { buffer.deallocate() }
@@ -215,7 +280,7 @@ class BluetoothManager: NSObject, ObservableObject {
         print("BLE 서비스 등록 및 광고 시작")
     }
     
-    // MARK: - 데이터 전송
+    // MARK: - 하이브리드 데이터 전송
     func sendToConnectedDevices(content: String) {
         guard isConnected, !connectedDevices.isEmpty else {
             print("연결된 기기가 없습니다")
@@ -223,46 +288,59 @@ class BluetoothManager: NSObject, ObservableObject {
         }
         
         let contentType = detectContentType(content)
-        let useWiFi = shouldUseWiFi(content, contentType: contentType)
+        let sizeKB = content.count / 1024
         
-        if useWiFi {
+        // 크기 체크
+        if content.count > Self.BLE_SIZE_THRESHOLD {
             let sizeMB = Double(content.count) / (1024.0 * 1024.0)
-            print("🌐 큰 데이터 감지 (\(contentType), \(String(format: "%.1f", sizeMB))MB), Wi-Fi 전송 권장")
+            print("🌐 데이터가 너무 큼 (\(contentType), \(String(format: "%.1f", sizeMB))MB > 200KB)")
             print("⚠️ 파일이 너무 큽니다. Wi-Fi 연결 시 더 빠르게 전송됩니다.")
             return
         }
         
-        let message = ClipboardMessage(content: content, deviceId: deviceId, contentType: contentType)
+        // 타입별 처리
+        if contentType == "image" {
+            sendImageData(content, sizeKB: sizeKB)
+        } else {
+            sendTextData(content)
+        }
+    }
+    
+    // 텍스트 전송 (헤더 포함)
+    private func sendTextData(_ content: String) {
+        let textWithHeader = "[TXT]" + content
+        let messageData = textWithHeader.data(using: .utf8) ?? Data()
         
-        do {
-            let originalData = try JSONEncoder().encode(message)
-            
-            // 압축 적용
-            guard let compressedData = compressData(originalData) else {
-                print("❌ 데이터 압축 실패, 원본 전송")
-                sendUncompressedData(originalData, content: content)
-                return
-            }
-            
-            let compressionRatio = (1 - Double(compressedData.count) / Double(originalData.count)) * 100
-            print("📤 메시지 전송 시도: \(content.prefix(30))...")
-            print("📤 원본 크기: \(originalData.count) bytes")
-            print("📤 압축 후: \(compressedData.count) bytes (\(String(format: "%.1f", compressionRatio))% 압축)")
-            
-            // Core Bluetooth를 통한 압축된 데이터 전송
-            if let characteristic = characteristic {
-                let success = peripheralManager?.updateValue(compressedData, for: characteristic, onSubscribedCentrals: nil) ?? false
-                if success {
-                    print("✅ BLE 압축 메시지 전송 성공")
-                } else {
-                    print("❌ BLE 압축 메시지 전송 실패")
-                }
+        print("📝 텍스트 전송: \(content.prefix(50))... (\(messageData.count) bytes)")
+        
+        if let characteristic = characteristic {
+            let success = peripheralManager?.updateValue(messageData, for: characteristic, onSubscribedCentrals: nil) ?? false
+            if success {
+                print("✅ BLE 텍스트 전송 성공")
             } else {
-                print("❌ BLE characteristic가 설정되지 않음")
+                print("❌ BLE 텍스트 전송 실패")
             }
-            
-        } catch {
-            print("❌ 메시지 인코딩 실패: \(error)")
+        } else {
+            print("❌ BLE characteristic가 설정되지 않음")
+        }
+    }
+    
+    // 이미지 전송 (헤더 포함)
+    private func sendImageData(_ content: String, sizeKB: Int) {
+        let imageWithHeader = "[IMG]" + content
+        let messageData = imageWithHeader.data(using: .utf8) ?? Data()
+        
+        print("🖼️ 이미지 전송: \(sizeKB)KB (\(messageData.count) bytes)")
+        
+        if let characteristic = characteristic {
+            let success = peripheralManager?.updateValue(messageData, for: characteristic, onSubscribedCentrals: nil) ?? false
+            if success {
+                print("✅ BLE 이미지 전송 성공")
+            } else {
+                print("❌ BLE 이미지 전송 실패")
+            }
+        } else {
+            print("❌ BLE characteristic가 설정되지 않음")
         }
     }
     
@@ -277,88 +355,63 @@ class BluetoothManager: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - 데이터 수신 처리
+    // MARK: - 하이브리드 데이터 수신 처리
     private func handleReceivedData(_ data: Data) {
         print("🔍🔍🔍 handleReceivedData 호출됨 - \(data.count) bytes 🔍🔍🔍")
-        let currentTime = Date()
         
-        // 새로운 데이터 시작인지 확인 (1초 이상 간격이 있으면 새 데이터로 간주)
-        if currentTime.timeIntervalSince(lastDataTime) > 1.0 {
-            dataBuffer = Data()
-            print("🔄🔄🔄 새로운 데이터 수신 시작 🔄🔄🔄")
-        }
+        // 텍스트로 변환
+        let textContent = String(data: data, encoding: .utf8) ?? "Invalid UTF-8"
+        print("📥📥📥 Android에서 데이터 수신: \(textContent.prefix(100))... 📥📥📥")
         
-        // 데이터를 버퍼에 추가
-        dataBuffer.append(data)
-        lastDataTime = currentTime
-        
-        let bufferString = String(data: dataBuffer, encoding: .utf8) ?? "Invalid UTF-8"
-        print("📥📥📥 누적 데이터 (\(dataBuffer.count) bytes): \(bufferString.prefix(200))... 📥📥📥")
-        print("📥 Raw 데이터: \(data.map { String(format: "%02x", $0) }.joined(separator: " "))")
-        
-        // 완전한 JSON인지 확인 (시작과 끝 브레이스가 모두 있는지)
-        let openBraces = bufferString.filter { $0 == "{" }.count
-        let closeBraces = bufferString.filter { $0 == "}" }.count
-        
-        print("🔍 JSON 분석: 열린괄호=\(openBraces), 닫힌괄호=\(closeBraces)")
-        
-        if openBraces > 0 && openBraces == closeBraces {
-            // 완전한 JSON이 조합됨
-            print("✅✅✅ 완전한 JSON 조합됨! 처리 시작 ✅✅✅")
-            print("✅ JSON 내용: \(bufferString)")
-            processCompleteJson(dataBuffer)
-            dataBuffer = Data() // 버퍼 초기화
+        // 빈 문자열이 아닌 경우 처리
+        if !textContent.isEmpty && textContent != "Invalid UTF-8" {
+            
+            // 헤더 확인하여 타입 구분
+            if textContent.hasPrefix("[TXT]") {
+                // 텍스트 데이터 처리
+                let content = String(textContent.dropFirst(5)) // "[TXT]" 제거
+                print("📝📝📝 텍스트 데이터 감지: \(content.prefix(50))... 📝📝📝")
+                processTextData(content)
+                
+            } else if textContent.hasPrefix("[IMG]") {
+                // 이미지 데이터 처리  
+                let content = String(textContent.dropFirst(5)) // "[IMG]" 제거
+                print("🖼️🖼️🖼️ 이미지 데이터 감지: \(content.prefix(50))... 🖼️🖼️🖼️")
+                processImageData(content)
+                
+            } else {
+                // 헤더 없는 경우 (기존 텍스트로 처리)
+                print("📝📝📝 헤더 없는 데이터를 텍스트로 처리: \(textContent.prefix(50))... 📝📝📝")
+                processTextData(textContent)
+            }
         } else {
-            print("⏳⏳⏳ JSON 조합 대기 중... (열린괄호: \(openBraces), 닫힌괄호: \(closeBraces)) ⏳⏳⏳")
+            print("❌❌❌ 유효하지 않은 데이터 ❌❌❌")
         }
     }
     
-    private func processCompleteJson(_ data: Data) {
-        print("🚀🚀🚀 processCompleteJson 시작 - \(data.count) bytes 🚀🚀🚀")
+    // 텍스트 데이터 처리
+    private func processTextData(_ content: String) {
+        print("✅✅✅ 텍스트 수신 완료! ClipboardManager로 전달 ✅✅✅")
         
-        do {
-            // 먼저 압축 해제 시도
-            var finalData = data
-            if let decompressedData = decompressData(data) {
-                print("📥📥📥 압축 해제 성공: \(data.count) -> \(decompressedData.count) bytes 📥📥📥")
-                finalData = decompressedData
-            } else {
-                print("📥📥📥 압축 해제 실패 또는 비압축 데이터, 원본 사용 📥📥📥")
-            }
-            
-            let jsonString = String(data: finalData, encoding: .utf8) ?? "Invalid UTF-8"
-            print("🔍🔍🔍 JSON 디코딩 시도: \(jsonString) 🔍🔍🔍")
-            
-            let message = try JSONDecoder().decode(ClipboardMessage.self, from: finalData)
-            
-            print("✅✅✅ JSON 디코딩 성공! ✅✅✅")
-            print("✅ DeviceId: \(message.deviceId) (내 ID: \(deviceId))")
-            print("✅ Content: \(message.content.prefix(100))...")
-            print("✅ ContentType: \(message.contentType)")
-            
-            // 자신이 보낸 메시지는 무시
-            guard message.deviceId != deviceId else { 
-                print("⚠️⚠️⚠️ 자신이 보낸 메시지 무시: \(message.deviceId) ⚠️⚠️⚠️")
-                return 
-            }
-            
-            print("🎉🎉🎉 Android에서 클립보드 메시지 수신 성공! 🎉🎉🎉")
-            print("🎉 내용: \(message.content.prefix(50))...")
-            
-            // ClipboardManager에 전달
-            DispatchQueue.main.async {
-                print("📋📋📋 ClipboardManager로 전달 중... 📋📋📋")
-                ClipboardManager.shared.receiveFromRemoteDevice(message.content)
-                print("📋📋📋 ClipboardManager 전달 완료! 📋📋📋")
-            }
-            
-        } catch {
-            let jsonString = String(data: data, encoding: .utf8) ?? "Invalid UTF-8"
-            print("❌❌❌ JSON 디코딩 실패: \(error) ❌❌❌")
-            print("❌ 원본 데이터: \(jsonString)")
-            print("❌ 데이터 길이: \(data.count) bytes")
+        DispatchQueue.main.async {
+            print("📋📋📋 ClipboardManager로 텍스트 전달 중... 📋📋📋")
+            ClipboardManager.shared.receiveFromRemoteDevice(content)
+            print("📋📋📋 ClipboardManager 텍스트 전달 완료! 📋📋📋")
         }
     }
+    
+    // 이미지 데이터 처리
+    private func processImageData(_ content: String) {
+        print("✅✅✅ 이미지 수신 완료! ClipboardManager로 전달 ✅✅✅")
+        
+        DispatchQueue.main.async {
+            print("📋📋📋 ClipboardManager로 이미지 전달 중... 📋📋📋")
+            ClipboardManager.shared.receiveFromRemoteDevice(content)
+            print("📋📋📋 ClipboardManager 이미지 전달 완료! 📋📋📋")
+        }
+    }
+    
+    // processCompleteJson 함수는 더 이상 사용하지 않음 (순수 텍스트 통신으로 변경)
     
     // MARK: - 동기화 요청
     

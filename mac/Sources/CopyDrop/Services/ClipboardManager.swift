@@ -205,6 +205,18 @@ class ClipboardManager: ObservableObject {
     }
     
     func receiveFromRemoteDevice(_ content: String) {
+        // 이미지인지 텍스트인지 구분
+        if content.hasPrefix("data:image/") {
+            // 이미지 데이터 처리
+            receiveImageFromRemoteDevice(content)
+        } else {
+            // 텍스트 데이터 처리
+            receiveTextFromRemoteDevice(content)
+        }
+    }
+    
+    // 텍스트 데이터 수신 처리
+    private func receiveTextFromRemoteDevice(_ content: String) {
         let remoteItem = ClipboardItem(
             content: content,
             timestamp: Date(),
@@ -221,8 +233,62 @@ class ClipboardManager: ObservableObject {
             // 원격 수신 푸시 알림 전송
             NotificationManager.shared.sendRemoteReceiveNotification(content: content, fromDevice: "Android")
             
-            print("원격에서 수신: \(content.prefix(30))...")
+            print("원격에서 텍스트 수신: \(content.prefix(30))...")
         }
+    }
+    
+    // 이미지 데이터 수신 처리
+    private func receiveImageFromRemoteDevice(_ content: String) {
+        print("🖼️🖼️🖼️ 이미지 데이터 처리 시작: \(content.prefix(50))... 🖼️🖼️🖼️")
+        
+        // base64에서 NSImage로 변환
+        guard let nsImage = base64StringToNSImage(content) else {
+            print("❌ 이미지 변환 실패")
+            return
+        }
+        
+        // 이미지 크기 정보 로깅
+        let size = nsImage.size
+        print("🖼️ 이미지 크기: \(Int(size.width))x\(Int(size.height))")
+        
+        let remoteItem = ClipboardItem(
+            content: content,
+            timestamp: Date(),
+            source: .remote,
+            type: .image,
+            imageData: nsImage.tiffRepresentation
+        )
+        
+        DispatchQueue.main.async {
+            self.history.insert(remoteItem, at: 0)
+            
+            // 자동으로 클립보드에 이미지 설정
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.writeObjects([nsImage])
+            
+            // 원격 수신 푸시 알림 전송 (이미지)
+            NotificationManager.shared.sendRemoteReceiveNotification(content: "🖼️ 이미지", fromDevice: "Android")
+            
+            print("원격에서 이미지 수신 완료: \(Int(size.width))x\(Int(size.height))")
+        }
+    }
+    
+    // base64 문자열을 NSImage로 변환
+    private func base64StringToNSImage(_ base64String: String) -> NSImage? {
+        // "data:image/png;base64," 부분 제거
+        guard let commaRange = base64String.range(of: ","),
+              let base64Data = Data(base64Encoded: String(base64String[base64String.index(after: commaRange.lowerBound)...])) else {
+            print("❌ base64 데이터 파싱 실패")
+            return nil
+        }
+        
+        guard let nsImage = NSImage(data: base64Data) else {
+            print("❌ NSImage 생성 실패")
+            return nil
+        }
+        
+        print("✅ NSImage 생성 성공")
+        return nsImage
     }
     
     func clearHistory() {

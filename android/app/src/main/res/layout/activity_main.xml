@@ -149,6 +149,74 @@
 
         </LinearLayout>
 
+        <!-- 이미지 전송 진행률 표시 -->
+        <LinearLayout
+            android:id="@+id/imageProgressSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:background="@android:color/white"
+            android:layout_marginBottom="16dp"
+            android:elevation="1dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🖼️ 이미지 전송 중"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="@android:color/black" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="12dp"
+                android:gravity="center_vertical">
+
+                <ProgressBar
+                    android:id="@+id/imageProgressSpinner"
+                    style="?android:attr/progressBarStyleSmall"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:layout_marginEnd="12dp" />
+
+                <TextView
+                    android:id="@+id/imageProgressText"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="이미지 처리 중..."
+                    android:textSize="14sp"
+                    android:textColor="@android:color/holo_blue_dark" />
+
+            </LinearLayout>
+
+            <ProgressBar
+                android:id="@+id/imageProgressBar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="8dp"
+                android:layout_marginTop="8dp"
+                android:max="100"
+                android:progress="0"
+                android:progressTint="@android:color/holo_blue_bright"
+                android:progressBackgroundTint="@android:color/darker_gray" />
+
+            <TextView
+                android:id="@+id/imageProgressPercent"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="0%"
+                android:textSize="12sp"
+                android:textColor="@android:color/darker_gray"
+                android:layout_gravity="end" />
+
+        </LinearLayout>
+
         <!-- 클립보드 기록 -->
         <LinearLayout
             android:layout_width="match_parent"
