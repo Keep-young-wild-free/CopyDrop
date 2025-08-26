@@ -1,0 +1,304 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/appopen"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F7F8FA"
+    android:clipToOutline="true">
+
+    <!-- 상단 타이틀 -->
+    <LinearLayout
+        android:id="@+id/titleContainer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_centerHorizontal="true"
+        android:layout_marginTop="120dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+        
+        <TextView
+            android:id="@+id/titleText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="CopyDrop"
+            android:textSize="32sp"
+            android:textStyle="bold"
+            android:textColor="#2C2C2C"
+            android:fontFamily="sans-serif-medium" />
+        
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="beta"
+            android:textSize="14sp"
+            android:textColor="#FF6B6B"
+            android:background="@drawable/beta_badge"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="2dp"
+            android:layout_marginStart="12dp"
+            android:layout_marginTop="-8dp" />
+    </LinearLayout>
+
+    <!-- Pin 입력 영역 -->
+    <RelativeLayout
+        android:id="@+id/pinContainer"
+        android:layout_width="280dp"
+        android:layout_height="wrap_content"
+        android:layout_centerHorizontal="true"
+        android:layout_below="@id/titleContainer"
+        android:layout_marginTop="80dp">
+
+        <!-- Pin 디스플레이 -->
+        <LinearLayout
+            android:id="@+id/pinDisplay"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_centerHorizontal="true">
+
+            <TextView
+                android:id="@+id/pin1"
+                android:layout_width="60dp"
+                android:layout_height="60dp"
+                android:background="@drawable/pin_digit_empty"
+                android:gravity="center"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#2C2C2C"
+                android:layout_marginEnd="16dp" />
+
+            <TextView
+                android:id="@+id/pin2"
+                android:layout_width="60dp"
+                android:layout_height="60dp"
+                android:background="@drawable/pin_digit_empty"
+                android:gravity="center"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#2C2C2C"
+                android:layout_marginEnd="16dp" />
+
+            <TextView
+                android:id="@+id/pin3"
+                android:layout_width="60dp"
+                android:layout_height="60dp"
+                android:background="@drawable/pin_digit_empty"
+                android:gravity="center"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#2C2C2C"
+                android:layout_marginEnd="16dp" />
+
+            <TextView
+                android:id="@+id/pin4"
+                android:layout_width="60dp"
+                android:layout_height="60dp"
+                android:background="@drawable/pin_digit_empty"
+                android:gravity="center"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#2C2C2C" />
+
+        </LinearLayout>
+
+        <!-- 숫자 키패드 -->
+        <GridLayout
+            android:id="@+id/numberPad"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:columnCount="3"
+            android:rowCount="4"
+            android:layout_marginTop="60dp"
+            android:layout_below="@id/pinDisplay"
+            android:layout_centerHorizontal="true">
+
+            <!-- 1, 2, 3 -->
+            <TextView
+                android:id="@+id/btn1"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:text="1"
+                android:gravity="center"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#2C2C2C"
+                android:background="@drawable/number_button"
+                android:layout_margin="8dp"
+                android:clickable="true"
+                android:focusable="true" />
+
+            <TextView
+                android:id="@+id/btn2"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:text="2"
+                android:gravity="center"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#2C2C2C"
+                android:background="@drawable/number_button"
+                android:layout_margin="8dp"
+                android:clickable="true"
+                android:focusable="true" />
+
+            <TextView
+                android:id="@+id/btn3"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:text="3"
+                android:gravity="center"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#2C2C2C"
+                android:background="@drawable/number_button"
+                android:layout_margin="8dp"
+                android:clickable="true"
+                android:focusable="true" />
+
+            <!-- 4, 5, 6 -->
+            <TextView
+                android:id="@+id/btn4"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:text="4"
+                android:gravity="center"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#2C2C2C"
+                android:background="@drawable/number_button"
+                android:layout_margin="8dp"
+                android:clickable="true"
+                android:focusable="true" />
+
+            <TextView
+                android:id="@+id/btn5"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:text="5"
+                android:gravity="center"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#2C2C2C"
+                android:background="@drawable/number_button"
+                android:layout_margin="8dp"
+                android:clickable="true"
+                android:focusable="true" />
+
+            <TextView
+                android:id="@+id/btn6"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:text="6"
+                android:gravity="center"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#2C2C2C"
+                android:background="@drawable/number_button"
+                android:layout_margin="8dp"
+                android:clickable="true"
+                android:focusable="true" />
+
+            <!-- 7, 8, 9 -->
+            <TextView
+                android:id="@+id/btn7"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:text="7"
+                android:gravity="center"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#2C2C2C"
+                android:background="@drawable/number_button"
+                android:layout_margin="8dp"
+                android:clickable="true"
+                android:focusable="true" />
+
+            <TextView
+                android:id="@+id/btn8"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:text="8"
+                android:gravity="center"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#2C2C2C"
+                android:background="@drawable/number_button"
+                android:layout_margin="8dp"
+                android:clickable="true"
+                android:focusable="true" />
+
+            <TextView
+                android:id="@+id/btn9"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:text="9"
+                android:gravity="center"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#2C2C2C"
+                android:background="@drawable/number_button"
+                android:layout_margin="8dp"
+                android:clickable="true"
+                android:focusable="true" />
+
+            <!-- 빈 공간, 0, 빈 공간 -->
+            <View
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:layout_margin="8dp" />
+
+            <TextView
+                android:id="@+id/btn0"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:text="0"
+                android:gravity="center"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#2C2C2C"
+                android:background="@drawable/number_button"
+                android:layout_margin="8dp"
+                android:clickable="true"
+                android:focusable="true" />
+
+            <View
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:layout_margin="8dp" />
+
+        </GridLayout>
+
+    </RelativeLayout>
+
+    <!-- 상태 메시지 -->
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_centerHorizontal="true"
+        android:layout_below="@id/pinContainer"
+        android:layout_marginTop="40dp"
+        android:text="연결을 시작하려면 아래 버튼을 누르세요"
+        android:textSize="16sp"
+        android:textColor="#666666"
+        android:gravity="center"
+        android:maxWidth="280dp" />
+
+    <!-- 시작하기 버튼 -->
+    <Button
+        android:id="@+id/startButton"
+        android:layout_width="200dp"
+        android:layout_height="50dp"
+        android:layout_centerHorizontal="true"
+        android:layout_below="@id/statusText"
+        android:layout_marginTop="30dp"
+        android:text="연결 시작"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:background="#4285F4"
+        android:textColor="#FFFFFF"
+        android:clickable="true"
+        android:focusable="true" />
+
+</RelativeLayout>

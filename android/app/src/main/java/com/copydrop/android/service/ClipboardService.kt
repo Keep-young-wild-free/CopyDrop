@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.copydrop.android.util.NotificationUtil
 
 /**
  * Android 클립보드 모니터링 및 관리
@@ -230,24 +231,22 @@ class ClipboardService(private val context: Context) {
     private fun performClipboardAccess(content: String) {
         Log.d(TAG, "🔥 클립보드 접근 시작: ${content.take(30)}...")
         
-        // 앱을 강제로 포그라운드로 전환
-        bringAppToForeground()
+        // 알림 표시 (포그라운드 전환 대신)
+        showClipboardSyncNotification(content)
         
-        // 잠시 대기
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            try {
-                val clipData = ClipData.newPlainText("CopyDrop", content)
-                clipboardManager.setPrimaryClip(clipData)
-                lastClipboardContent = content
-                Log.d(TAG, "✅ 클립보드 설정 성공: ${content.take(30)}...")
-            } catch (e: SecurityException) {
-                Log.e(TAG, "❌ 클립보드 접근 거부: ${e.message}")
-                // Accessibility Service 재시도
-                retryWithAccessibilityService(content)
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ 클립보드 설정 실패: ${e.message}")
-            }
-        }, 200) // 200ms 대기
+        // 바로 클립보드 설정 시도
+        try {
+            val clipData = ClipData.newPlainText("CopyDrop", content)
+            clipboardManager.setPrimaryClip(clipData)
+            lastClipboardContent = content
+            Log.d(TAG, "✅ 클립보드 설정 성공: ${content.take(30)}...")
+        } catch (e: SecurityException) {
+            Log.e(TAG, "❌ 클립보드 접근 거부: ${e.message}")
+            // Accessibility Service 재시도
+            retryWithAccessibilityService(content)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 클립보드 설정 실패: ${e.message}")
+        }
     }
     
     private fun retryWithAccessibilityService(content: String) {
@@ -260,14 +259,12 @@ class ClipboardService(private val context: Context) {
         }
     }
     
-    private fun bringAppToForeground() {
+    private fun showClipboardSyncNotification(content: String) {
         try {
-            val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-            intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            context.startActivity(intent)
-            Log.d(TAG, "앱을 포그라운드로 가져옴")
+            NotificationUtil.showClipboardSyncNotification(context, content)
+            Log.d(TAG, "📱 클립보드 동기화 알림 표시")
         } catch (e: Exception) {
-            Log.e(TAG, "앱을 포그라운드로 가져오기 실패: ${e.message}")
+            Log.e(TAG, "❌ 알림 표시 실패: ${e.message}")
         }
     }
     

@@ -3,4 +3,10 @@
     <style name="Theme.CopyDrop" parent="android:Theme.Holo.Light">
         <item name="android:colorPrimary">@android:color/holo_blue_bright</item>
     </style>
+    
+    <style name="Theme.CopyDrop.NoActionBar" parent="Theme.CopyDrop">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+    </style>
 </resources>

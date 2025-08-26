@@ -728,6 +728,35 @@ class MainActivity : Activity() {
             }
         }
         
+        override fun onAuthRequired() {
+            runOnUiThread {
+                Log.d(TAG, "🔐 PIN 인증이 필요합니다")
+                statusText.text = "🔐 PIN 인증 필요"
+            }
+        }
+        
+        override fun onAuthSuccess(sessionToken: String) {
+            runOnUiThread {
+                Log.d(TAG, "🎉 PIN 인증 성공!")
+                statusText.text = "✅ 인증 성공 - 클립보드 동기화 준비됨"
+                statusText.setTextColor(resources.getColor(android.R.color.holo_green_dark))
+                showMessage("🎉 Mac과 연결되었습니다!")
+            }
+        }
+        
+        override fun onAuthFailed(error: String) {
+            runOnUiThread {
+                Log.w(TAG, "❌ PIN 인증 실패: $error")
+                statusText.text = "❌ 인증 실패: $error"
+                statusText.setTextColor(resources.getColor(android.R.color.holo_red_dark))
+                showMessage("❌ 인증 실패: $error")
+                
+                // 스캔 버튼 다시 활성화
+                scanButton.text = getString(R.string.scan_for_devices)
+                scanButton.isEnabled = true
+            }
+        }
+        
         // 이미지 전송 관련 콜백 구현
     }
     

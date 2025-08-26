@@ -47,6 +47,9 @@ class BluetoothManager: NSObject, ObservableObject {
     private var dataBuffer = Data()
     private var lastDataTime = Date()
     
+    // 클립보드 허브 참조
+    weak var pinAuthManager: PinAuthManager?
+    
     // Core Bluetooth 설정
     private let serviceUUID = CBUUID(string: "00001101-0000-1000-8000-00805F9B34FB")
     private let characteristicUUID = CBUUID(string: "00002101-0000-1000-8000-00805F9B34FB")
@@ -269,7 +272,7 @@ class BluetoothManager: NSObject, ObservableObject {
             return
         }
         
-        let sizeKB = content.count / 1024
+        let _ = content.count / 1024 // 크기 확인용
         
         // 크기 체크
         if content.count > Self.BLE_SIZE_THRESHOLD {
@@ -285,9 +288,24 @@ class BluetoothManager: NSObject, ObservableObject {
     
     // 텍스트 전송
     private func sendTextData(_ content: String) {
-        let messageData = content.data(using: .utf8) ?? Data()
+        print("📝 암호화된 텍스트 전송: \(content.prefix(50))... ")
         
-        print("📝 텍스트 전송: \(content.prefix(50))... (\(messageData.count) bytes)")
+        var finalContent = content
+        
+        // 세션이 활성화된 경우 암호화 시도
+        if let sessionToken = PinAuthManager.shared.getActiveSessionToken() {
+            if let encryptedContent = CryptoManager.shared.encrypt(content, sessionToken: sessionToken) {
+                print("🔐 Mac에서 데이터 암호화 성공")
+                finalContent = encryptedContent
+            } else {
+                print("⚠️ Mac 암호화 실패, 원본 데이터 전송")
+            }
+        } else {
+            print("⚠️ 활성 세션 없음, 원본 데이터 전송")
+        }
+        
+        let messageData = finalContent.data(using: .utf8) ?? Data()
+        print("📤 최종 전송 데이터 크기: \(messageData.count) bytes")
         
         if let characteristic = characteristic {
             let success = peripheralManager?.updateValue(messageData, for: characteristic, onSubscribedCentrals: nil) ?? false
@@ -334,11 +352,53 @@ class BluetoothManager: NSObject, ObservableObject {
     
     // 텍스트 데이터 처리
     private func processTextData(_ content: String) {
-        print("✅✅✅ 텍스트 수신 완료! ClipboardManager로 전달 ✅✅✅")
+        print("✅✅✅ 텍스트 수신 완료! 메시지 타입 확인 중... ✅✅✅")
         
+        var finalContent = content
+        
+        // 암호화된 데이터인지 확인 및 복호화 시도
+        if CryptoManager.shared.isEncrypted(content) {
+            print("🔐 암호화된 데이터 감지, 복호화 시도 중...")
+            
+            // 활성 세션으로 복호화 시도
+            if let sessionToken = PinAuthManager.shared.getActiveSessionToken() {
+                if let decryptedContent = CryptoManager.shared.decrypt(content, sessionToken: sessionToken) {
+                    print("🔓 Mac에서 복호화 성공")
+                    finalContent = decryptedContent
+                } else {
+                    print("⚠️ 복호화 실패, 원본 데이터로 처리")
+                }
+            } else {
+                print("⚠️ 활성 세션 없음, 복호화 불가")
+            }
+        }
+        
+        // JSON 메시지인지 확인
+        if finalContent.hasPrefix("{") && finalContent.hasSuffix("}") {
+            print("📱 JSON 메시지 감지 - Pin 인증 요청 처리 시도")
+            
+            // Pin 인증 요청 처리 시도
+            if let authResponse = PinAuthManager.shared.processAuthRequest(finalContent) {
+                print("🔐 Pin 인증 응답 생성: \(authResponse)")
+                sendTextData(authResponse)
+                return
+            }
+            
+            // 재연결 요청 처리 시도
+            if let reconnectResponse = PinAuthManager.shared.processReconnectRequest(finalContent) {
+                print("🔄 재연결 응답 생성: \(reconnectResponse)")
+                sendTextData(reconnectResponse)
+                return
+            }
+            
+            // 다른 JSON 메시지 타입 처리 가능
+            print("⚠️ 알 수 없는 JSON 메시지: \(finalContent.prefix(100))")
+        }
+        
+        // 일반 텍스트로 처리
         DispatchQueue.main.async {
             print("📋📋📋 ClipboardManager로 텍스트 전달 중... 📋📋📋")
-            ClipboardManager.shared.receiveFromRemoteDevice(content)
+            ClipboardManager.shared.receiveFromRemoteDevice(finalContent)
             print("📋📋📋 ClipboardManager 텍스트 전달 완료! 📋📋📋")
         }
     }

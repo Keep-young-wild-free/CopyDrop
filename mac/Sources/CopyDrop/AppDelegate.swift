@@ -1,9 +1,12 @@
 import AppKit
 import SwiftUI
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var statusItem: NSStatusItem?
     var settingsWindow: NSWindow?
+    var pinDisplayWindow: NSWindow?
+    var clipboardHubWindow: NSWindow?
+    var pinAuthManager = PinAuthManager.shared
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("🎯 AppDelegate.applicationDidFinishLaunching 호출됨")
@@ -19,6 +22,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // 서비스 시작
         ClipboardManager.shared.start()
+        BluetoothManager.shared.pinAuthManager = PinAuthManager.shared
         BluetoothManager.shared.start()
         
         print("✅ CopyDrop 초기화 완료")
@@ -236,6 +240,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         settingsItem.target = self
         menu.addItem(settingsItem)
         
+        // Pin 연결
+        let pinConnectItem = NSMenuItem(title: "Pin으로 연결...", action: #selector(showPinConnection), keyEquivalent: "p")
+        pinConnectItem.target = self
+        menu.addItem(pinConnectItem)
+        
+        // 클립보드 허브
+        let clipboardHubItem = NSMenuItem(title: "클립보드 허브...", action: #selector(showClipboardHub), keyEquivalent: "h")
+        clipboardHubItem.target = self
+        menu.addItem(clipboardHubItem)
+        
         // 블루투스 상태
         let bluetoothStatus = BluetoothManager.shared.isServerRunning ? "블루투스 서버 중지" : "블루투스 서버 시작"
         let bluetoothItem = NSMenuItem(title: bluetoothStatus, action: #selector(toggleBluetoothServer), keyEquivalent: "b")
@@ -284,6 +298,87 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    @objc func showClipboardHub() {
+        // 클립보드 허브 창이 이미 열려있으면 앞으로 가져오기
+        if let existingWindow = clipboardHubWindow, existingWindow.isVisible {
+            existingWindow.makeKeyAndOrderFront(nil)
+            return
+        }
+        
+        // 클립보드 허브 뷰 생성
+        let clipboardHubView = ClipboardHubView(pinAuthManager: pinAuthManager)
+        
+        let hostingController = NSHostingController(rootView: clipboardHubView)
+        
+        clipboardHubWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 500),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        
+        clipboardHubWindow?.contentViewController = hostingController
+        clipboardHubWindow?.title = "클립보드 허브"
+        clipboardHubWindow?.delegate = self
+        clipboardHubWindow?.center()
+        clipboardHubWindow?.setFrameAutosaveName("ClipboardHubWindow")
+        clipboardHubWindow?.makeKeyAndOrderFront(nil)
+        
+        print("📋 클립보드 허브 창 열림")
+    }
+    
+    @objc func showPinConnection() {
+        // 블루투스 서버가 실행 중이 아니면 시작
+        if !BluetoothManager.shared.isServerRunning {
+            BluetoothManager.shared.startServer()
+        }
+        
+        // 새 Pin 생성
+        let _ = pinAuthManager.generateNewPin()
+        print("🔐 Pin 연결 시작")
+        
+        // Pin 표시 창이 이미 열려있으면 앞으로 가져오기
+        if let existingWindow = pinDisplayWindow, existingWindow.isVisible {
+            existingWindow.makeKeyAndOrderFront(nil)
+            return
+        }
+        
+        // Pin 표시 뷰 생성
+        let pinDisplayView = PinDisplayView(pinAuthManager: pinAuthManager) { [weak self] in
+            self?.closePinDisplay()
+        }
+        
+        let hostingController = NSHostingController(rootView: pinDisplayView)
+        
+        // 새 창 생성
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 450, height: 500),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        
+        window.title = "CopyDrop Pin 연결"
+        window.contentViewController = hostingController
+        window.center()
+        window.level = .floating
+        window.isReleasedWhenClosed = false
+        
+        // 창 델리게이트 설정
+        window.delegate = self
+        
+        pinDisplayWindow = window
+        window.makeKeyAndOrderFront(nil)
+        
+        // 앱을 활성화
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    
+    private func closePinDisplay() {
+        pinDisplayWindow?.close()
+        pinDisplayWindow = nil
+    }
+    
     
     @objc func showSettings() {
         if settingsWindow == nil {
@@ -306,7 +401,55 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func applicationWillTerminate(_ notification: Notification) {
+        print("🔄 CopyDrop 종료 시작 - 리소스 정리 중...")
+        
+        // 모든 창 닫기
+        if let settingsWindow = settingsWindow {
+            settingsWindow.close()
+            self.settingsWindow = nil
+        }
+        
+        if let pinDisplayWindow = pinDisplayWindow {
+            pinDisplayWindow.close()
+            self.pinDisplayWindow = nil
+        }
+        
+        if let clipboardHubWindow = clipboardHubWindow {
+            clipboardHubWindow.close()
+            self.clipboardHubWindow = nil
+        }
+        
+        // 서비스 정지
         ClipboardManager.shared.stop()
         BluetoothManager.shared.stop()
+        
+        // NotificationCenter 옵저버 제거
+        NotificationCenter.default.removeObserver(self)
+        
+        // 메뉴바 아이템 제거
+        if let statusItem = statusItem {
+            NSStatusBar.system.removeStatusItem(statusItem)
+            self.statusItem = nil
+        }
+        
+        print("✅ CopyDrop 종료 완료")
+    }
+    
+    deinit {
+        print("🗑️ AppDelegate deinit 호출됨")
+        // 혹시 남아있는 리소스 정리
+        NotificationCenter.default.removeObserver(self)
+    }
+    
+    // MARK: - NSWindowDelegate
+    
+    func windowWillClose(_ notification: Notification) {
+        if let window = notification.object as? NSWindow {
+            if window == pinDisplayWindow {
+                pinDisplayWindow = nil
+            } else if window == settingsWindow {
+                settingsWindow = nil
+            }
+        }
     }
 }

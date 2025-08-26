@@ -29,6 +29,10 @@ let package = Package(
                 .linkedFramework("Network"),
                 .linkedFramework("UserNotifications")
             ]
+        ),
+        .testTarget(
+            name: "CopyDropTests",
+            dependencies: ["CopyDrop"]
         )
     ]
 )

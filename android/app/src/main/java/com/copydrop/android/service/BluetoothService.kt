@@ -10,6 +10,7 @@ import android.content.Context
 import android.os.ParcelUuid
 import android.util.Log
 import com.copydrop.android.model.ClipboardMessage
+import com.copydrop.android.auth.PinAuthManager
 import com.google.gson.Gson
 import java.util.*
 import java.util.zip.GZIPInputStream
@@ -28,6 +29,7 @@ class BluetoothService(private val context: Context) {
     private val bluetoothAdapter = bluetoothManager.adapter
     private val bluetoothLeScanner: BluetoothLeScanner? = bluetoothAdapter?.bluetoothLeScanner
     private val gson = Gson()
+    private val pinAuthManager = PinAuthManager(context) // PIN 인증 관리자 추가
     
     private var bluetoothGatt: BluetoothGatt? = null
     private var targetCharacteristic: BluetoothGattCharacteristic? = null
@@ -78,7 +80,9 @@ class BluetoothService(private val context: Context) {
         fun onMessageReceived(message: ClipboardMessage)
         fun onError(error: String)
         fun onSyncRequested() // Mac에서 동기화 요청 시
-        
+        fun onAuthRequired() // PIN 인증 필요
+        fun onAuthSuccess(sessionToken: String) // PIN 인증 성공
+        fun onAuthFailed(error: String) // PIN 인증 실패
     }
     
     private var callback: BluetoothServiceCallback? = null
@@ -89,6 +93,61 @@ class BluetoothService(private val context: Context) {
     }
     
     fun isBluetoothEnabled(): Boolean = bluetoothAdapter?.isEnabled == true
+    
+    // PIN 인증을 위한 변수
+    private var currentPin: String? = null
+    
+    /**
+     * PIN 인증을 시작합니다
+     */
+    fun authenticateWithPin(pin: String) {
+        currentPin = pin
+        Log.d(TAG, "🔐 PIN 인증 준비: $pin")
+    }
+    
+    /**
+     * PIN 인증 상태를 초기화합니다
+     */
+    fun clearPinAuthentication() {
+        currentPin = null
+        Log.d(TAG, "🔐 PIN 인증 상태 초기화")
+    }
+    
+    /**
+     * PIN 인증 메시지를 Mac으로 전송합니다
+     */
+    private fun sendPinAuthentication(pin: String) {
+        try {
+            Log.d(TAG, "🔐 PIN 인증 메시지 전송 시작: $pin")
+            
+            // PinAuthManager를 사용하여 인증 요청 메시지 생성
+            val authRequestJson = pinAuthManager.createAuthRequest(pin)
+            Log.d(TAG, "📤 인증 요청 메시지 생성: ${authRequestJson.take(100)}...")
+            
+            // Mac으로 인증 요청 전송
+            targetCharacteristic?.let { characteristic ->
+                val authData = authRequestJson.toByteArray(Charsets.UTF_8)
+                
+                characteristic.value = authData
+                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                
+                val success = bluetoothGatt?.writeCharacteristic(characteristic) ?: false
+                if (success) {
+                    Log.d(TAG, "✅ PIN 인증 요청 전송 성공")
+                } else {
+                    Log.e(TAG, "❌ PIN 인증 요청 전송 실패")
+                    callback?.onAuthFailed("PIN 인증 요청 전송 실패")
+                }
+            } ?: run {
+                Log.e(TAG, "❌ targetCharacteristic이 null입니다")
+                callback?.onAuthFailed("연결이 준비되지 않았습니다")
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ PIN 인증 전송 중 오류 발생", e)
+            callback?.onAuthFailed("PIN 인증 전송 실패: ${e.message}")
+        }
+    }
     
     fun startScan() {
         if (isScanning) return
@@ -155,6 +214,7 @@ class BluetoothService(private val context: Context) {
         bluetoothGatt?.close()
         bluetoothGatt = null
         targetCharacteristic = null
+        clearPinAuthentication() // 연결 해제 시 PIN 상태 초기화
     }
     
     private val gattCallback = object : BluetoothGattCallback() {
@@ -196,6 +256,12 @@ class BluetoothService(private val context: Context) {
                         
                         Log.d(TAG, "CopyDropService 연결 완료")
                         callback?.onConnected()
+                        
+                        // 자동 PIN 인증 시작
+                        currentPin?.let { pin ->
+                            Log.d(TAG, "🔐 자동 PIN 인증 시작: $pin")
+                            sendPinAuthentication(pin)
+                        }
                     }
                 } else {
                     callback?.onError("CopyDropService를 찾을 수 없습니다")
@@ -225,22 +291,30 @@ class BluetoothService(private val context: Context) {
                     
                     Log.d(TAG, "📥 Mac에서 하이브리드 데이터 수신: ${rawContent.take(100)}...")
                     
-                    // 헤더 확인하여 타입 구분
-                    // 모든 데이터를 텍스트로 처리
-                    Log.d(TAG, "📝 텍스트 데이터 수신: ${rawContent.take(50)}...")
-                    val cleanContent = rawContent
-                    
-                    // ClipboardMessage 객체 생성
-                    val message = ClipboardMessage(
-                        content = cleanContent,
-                        deviceId = "mac-device"
-                    )
-                    
-                    Log.d(TAG, "✅✅✅ Mac에서 텍스트 수신 완료: ${cleanContent.take(30)}... ✅✅✅")
-                    callback?.onMessageReceived(message)
+                    // 메시지 타입 확인 (인증 응답인지 클립보드 데이터인지)
+                    if (rawContent.contains("\"type\":\"auth_response\"")) {
+                        // 인증 응답 처리
+                        handleAuthResponse(rawContent)
+                    } else if (rawContent.contains("\"type\":\"sync_request\"")) {
+                        // 동기화 요청 처리
+                        handleSyncRequest(rawContent)
+                    } else {
+                        // 일반 클립보드 데이터 처리
+                        Log.d(TAG, "📝 클립보드 데이터 수신: ${rawContent.take(50)}...")
+                        val cleanContent = rawContent
+                        
+                        // ClipboardMessage 객체 생성
+                        val message = ClipboardMessage(
+                            content = cleanContent,
+                            deviceId = "mac-device"
+                        )
+                        
+                        Log.d(TAG, "✅✅✅ Mac에서 클립보드 수신 완료: ${cleanContent.take(30)}... ✅✅✅")
+                        callback?.onMessageReceived(message)
+                    }
                     
                 } catch (e: Exception) {
-                    Log.e(TAG, "❌❌❌ 텍스트 처리 실패 ❌❌❌", e)
+                    Log.e(TAG, "❌❌❌ 데이터 처리 실패 ❌❌❌", e)
                 }
             }
         }
@@ -472,6 +546,47 @@ class BluetoothService(private val context: Context) {
                 sentChunks.clear()
                 retryCount = 0
             }
+        }
+    }
+    
+    // MARK: - 인증 응답 처리
+    
+    /**
+     * Mac에서 온 인증 응답 처리
+     */
+    private fun handleAuthResponse(jsonString: String) {
+        try {
+            Log.d(TAG, "🔐 인증 응답 처리 중...")
+            
+            // PinAuthManager를 사용하여 인증 응답 파싱
+            val authResponse = pinAuthManager.parseAuthResponse(jsonString)
+            
+            if (authResponse != null) {
+                if (authResponse.success) {
+                    Log.d(TAG, "🎉 PIN 인증 성공!")
+                    
+                    // 세션 토큰 저장
+                    authResponse.sessionToken?.let { token ->
+                        pinAuthManager.saveSessionToken(token, pinAuthManager.getOrCreateDeviceId())
+                        Log.d(TAG, "💾 세션 토큰 저장 완료: ${token.take(8)}...")
+                    }
+                    
+                    // 성공 콜백 호출
+                    callback?.onAuthSuccess(authResponse.sessionToken ?: "")
+                    
+                } else {
+                    Log.w(TAG, "❌ PIN 인증 실패: ${authResponse.error}")
+                    clearPinAuthentication() // PIN 상태 초기화
+                    callback?.onAuthFailed(authResponse.error ?: "PIN 인증 실패")
+                }
+            } else {
+                Log.e(TAG, "❌ 인증 응답 파싱 실패")
+                callback?.onAuthFailed("인증 응답 파싱 실패")
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 인증 응답 처리 실패", e)
+            callback?.onAuthFailed("인증 응답 처리 실패: ${e.message}")
         }
     }
     

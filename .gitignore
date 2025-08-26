@@ -103,3 +103,4 @@ CopyDrop.log
 # Backup files
 *.backup
 *.old
+*.hprof

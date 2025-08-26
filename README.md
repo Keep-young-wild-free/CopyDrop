@@ -120,9 +120,32 @@ cd android
 
 ## 🔧 개발 및 기여
 
-### 개발 환경
+### 개발 환경 설정
+
+**필수 요구사항:**
 - **Mac**: Xcode 15.0+, Swift 5.9+
 - **Android**: Android Studio, Kotlin
+- **Java**: OpenJDK 17 (Android 빌드용)
+
+**환경 설정:**
+1. **Java 17 설정** (Android 빌드 필수)
+   ```bash
+   # Homebrew로 Java 17 설치 (이미 설치된 경우 생략)
+   brew install openjdk@17
+   
+   # 빌드 시 Java 17 사용
+   export JAVA_HOME=/opt/homebrew/opt/openjdk@17
+   ```
+
+2. **Android SDK 경로 설정**
+   ```bash
+   # android/local.properties 파일에서 SDK 경로 확인/수정
+   sdk.dir=/Users/[사용자명]/Library/Android/sdk
+   ```
+
+### 빌드 명령어
+- **Android**: `cd android && ./gradlew assembleDebug`
+- **Mac**: `cd mac && swift build`
 
 ### 주요 라이브러리
 - **Mac**: Core Bluetooth, SwiftUI, AppKit
