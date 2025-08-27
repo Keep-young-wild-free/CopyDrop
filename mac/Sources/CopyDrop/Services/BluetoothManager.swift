@@ -288,20 +288,28 @@ class BluetoothManager: NSObject, ObservableObject {
     
     // 텍스트 전송
     private func sendTextData(_ content: String) {
-        print("📝 암호화된 텍스트 전송: \(content.prefix(50))... ")
+        print("📝 텍스트 전송: \(content.prefix(50))... ")
         
         var finalContent = content
         
-        // 세션이 활성화된 경우 암호화 시도
-        if let sessionToken = PinAuthManager.shared.getActiveSessionToken() {
-            if let encryptedContent = CryptoManager.shared.encrypt(content, sessionToken: sessionToken) {
-                print("🔐 Mac에서 데이터 암호화 성공")
-                finalContent = encryptedContent
-            } else {
-                print("⚠️ Mac 암호화 실패, 원본 데이터 전송")
-            }
+        // 인증 관련 메시지는 암호화하지 않음 (세션이 아직 없으므로)
+        let isAuthMessage = content.contains("\"type\":\"auth_response\"") || 
+                           content.contains("\"type\":\"sync_request\"")
+        
+        if isAuthMessage {
+            print("🔐 인증/동기화 메시지 - 암호화 없이 전송")
         } else {
-            print("⚠️ 활성 세션 없음, 원본 데이터 전송")
+            // 일반 클립보드 데이터는 세션이 활성화된 경우 암호화 시도
+            if let sessionToken = PinAuthManager.shared.getActiveSessionToken() {
+                if let encryptedContent = CryptoManager.shared.encrypt(content, sessionToken: sessionToken) {
+                    print("🔐 Mac에서 데이터 암호화 성공")
+                    finalContent = encryptedContent
+                } else {
+                    print("⚠️ Mac 암호화 실패, 원본 데이터 전송")
+                }
+            } else {
+                print("⚠️ 활성 세션 없음, 원본 데이터 전송")
+            }
         }
         
         let messageData = finalContent.data(using: .utf8) ?? Data()

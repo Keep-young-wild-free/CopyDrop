@@ -4,6 +4,7 @@ import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -119,7 +120,21 @@ class MainActivity : Activity() {
             addAction("com.copydrop.android.SHOW_SYNC_TOAST")
             addAction("com.copydrop.android.SYNC_FROM_NOTIFICATION")
         }
-        registerReceiver(appReceiver, intentFilter)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(appReceiver, intentFilter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(appReceiver, intentFilter)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "BroadcastReceiver 등록 실패: ${e.message}")
+            // Fallback: 기본 방식으로 시도
+            try {
+                registerReceiver(appReceiver, intentFilter)
+            } catch (e2: Exception) {
+                Log.e(TAG, "BroadcastReceiver 기본 등록도 실패: ${e2.message}")
+            }
+        }
     }
     
     override fun onResume() {

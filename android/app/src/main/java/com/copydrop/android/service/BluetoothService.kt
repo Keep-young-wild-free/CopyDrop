@@ -96,12 +96,97 @@ class BluetoothService(private val context: Context) {
     
     // PIN 인증을 위한 변수
     private var currentPin: String? = null
+    private var isAuthenticating = false
     
+    // BLE 초기화 단계 관리
+    private enum class InitializationStep {
+        NONE,
+        CONNECTION_PRIORITY_REQUESTED,
+        MTU_REQUESTED,
+        NOTIFICATION_ENABLED,
+        DESCRIPTOR_WRITTEN,
+        READY_FOR_AUTH
+    }
+    
+    private var currentInitStep = InitializationStep.NONE
+    
+    /**
+     * 순차적 BLE 초기화를 시작합니다
+     */
+    private fun startSequentialInitialization(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+        Log.d(TAG, "🔧 순차적 BLE 초기화 시작...")
+        
+        // 1단계: 연결 우선순위 최적화
+        Log.d(TAG, "1단계: 연결 우선순위 최적화 중...")
+        currentInitStep = InitializationStep.CONNECTION_PRIORITY_REQUESTED
+        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+        
+        // Connection Priority는 콜백이 없으므로 바로 다음 단계 진행
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            continueInitialization(gatt, characteristic)
+        }, 100) // 100ms 대기
+    }
+    
+    /**
+     * 초기화 다음 단계 진행
+     */
+    private fun continueInitialization(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+        when (currentInitStep) {
+            InitializationStep.CONNECTION_PRIORITY_REQUESTED -> {
+                // 2단계: MTU 크기 요청
+                Log.d(TAG, "2단계: MTU 크기 요청 중...")
+                currentInitStep = InitializationStep.MTU_REQUESTED
+                gatt.requestMtu(517)
+            }
+            InitializationStep.MTU_REQUESTED -> {
+                // 3단계: Notification 활성화
+                Log.d(TAG, "3단계: Notification 활성화 중...")
+                currentInitStep = InitializationStep.NOTIFICATION_ENABLED
+                gatt.setCharacteristicNotification(characteristic, true)
+                
+                // Notification 설정도 콜백이 없으므로 바로 다음 단계
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    continueInitialization(gatt, characteristic)
+                }, 50)
+            }
+            InitializationStep.NOTIFICATION_ENABLED -> {
+                // 4단계: Descriptor 쓰기
+                Log.d(TAG, "4단계: Descriptor 설정 중...")
+                currentInitStep = InitializationStep.DESCRIPTOR_WRITTEN
+                
+                val descriptor = characteristic.getDescriptor(
+                    UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+                )
+                descriptor?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                gatt.writeDescriptor(descriptor)
+            }
+            InitializationStep.DESCRIPTOR_WRITTEN -> {
+                // 5단계: 초기화 완료
+                Log.d(TAG, "✅ BLE 초기화 완료!")
+                currentInitStep = InitializationStep.READY_FOR_AUTH
+                callback?.onConnected()
+                
+                // PIN 인증 시작
+                currentPin?.let { pin ->
+                    Log.d(TAG, "🔐 자동 PIN 인증 시작: $pin")
+                    // 약간의 지연 후 PIN 인증 전송
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        sendPinAuthentication(pin)
+                    }, 200)
+                }
+            }
+            else -> {
+                Log.w(TAG, "⚠️ 알 수 없는 초기화 단계: $currentInitStep")
+            }
+        }
+    }
+
     /**
      * PIN 인증을 시작합니다
      */
     fun authenticateWithPin(pin: String) {
         currentPin = pin
+        isAuthenticating = true
         Log.d(TAG, "🔐 PIN 인증 준비: $pin")
     }
     
@@ -110,6 +195,7 @@ class BluetoothService(private val context: Context) {
      */
     fun clearPinAuthentication() {
         currentPin = null
+        isAuthenticating = false
         Log.d(TAG, "🔐 PIN 인증 상태 초기화")
     }
     
@@ -214,6 +300,7 @@ class BluetoothService(private val context: Context) {
         bluetoothGatt?.close()
         bluetoothGatt = null
         targetCharacteristic = null
+        currentInitStep = InitializationStep.NONE // 초기화 상태 리셋
         clearPinAuthentication() // 연결 해제 시 PIN 상태 초기화
     }
     
@@ -237,31 +324,9 @@ class BluetoothService(private val context: Context) {
                 if (service != null) {
                     targetCharacteristic = service.getCharacteristic(CHARACTERISTIC_UUID)
                     targetCharacteristic?.let { characteristic ->
-                        // 연결 우선순위 최적화 (속도 향상)
-                        Log.d(TAG, "연결 우선순위 최적화 중...")
-                        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
-                        
-                        // MTU 크기 요청 (최대 517바이트 - BLE 최대값)
-                        Log.d(TAG, "MTU 크기 요청 중...")
-                        gatt.requestMtu(517)
-                        
-                        // Notification 활성화
-                        gatt.setCharacteristicNotification(characteristic, true)
-                        
-                        val descriptor = characteristic.getDescriptor(
-                            UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-                        )
-                        descriptor?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                        gatt.writeDescriptor(descriptor)
-                        
-                        Log.d(TAG, "CopyDropService 연결 완료")
-                        callback?.onConnected()
-                        
-                        // 자동 PIN 인증 시작
-                        currentPin?.let { pin ->
-                            Log.d(TAG, "🔐 자동 PIN 인증 시작: $pin")
-                            sendPinAuthentication(pin)
-                        }
+                        // 순차적 초기화 시작
+                        currentInitStep = InitializationStep.NONE
+                        startSequentialInitialization(gatt, characteristic)
                     }
                 } else {
                     callback?.onError("CopyDropService를 찾을 수 없습니다")
@@ -277,6 +342,11 @@ class BluetoothService(private val context: Context) {
                 Log.w(TAG, "⚠️ MTU 크기 설정 실패, 기본값 사용: 20 bytes")
                 currentMtu = 20
             }
+            
+            // MTU 설정 완료 후 다음 초기화 단계 진행
+            targetCharacteristic?.let { characteristic ->
+                continueInitialization(gatt, characteristic)
+            }
         }
         
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
@@ -291,25 +361,47 @@ class BluetoothService(private val context: Context) {
                     
                     Log.d(TAG, "📥 Mac에서 하이브리드 데이터 수신: ${rawContent.take(100)}...")
                     
-                    // 메시지 타입 확인 (인증 응답인지 클립보드 데이터인지)
-                    if (rawContent.contains("\"type\":\"auth_response\"")) {
-                        // 인증 응답 처리
-                        handleAuthResponse(rawContent)
-                    } else if (rawContent.contains("\"type\":\"sync_request\"")) {
-                        // 동기화 요청 처리
-                        handleSyncRequest(rawContent)
+                    // JSON 형태인지 먼저 확인
+                    if (rawContent.startsWith("{") && rawContent.contains("\"type\":")) {
+                        // JSON 형태의 메시지 처리
+                        when {
+                            rawContent.contains("\"type\":\"auth_response\"") -> {
+                                Log.d(TAG, "🔐 인증 응답 감지")
+                                handleAuthResponse(rawContent)
+                            }
+                            rawContent.contains("\"type\":\"sync_request\"") -> {
+                                Log.d(TAG, "🔄 동기화 요청 감지")
+                                handleSyncRequest(rawContent)
+                            }
+                            else -> {
+                                Log.d(TAG, "📝 JSON 형태 클립보드 데이터")
+                                val message = ClipboardMessage(
+                                    content = rawContent,
+                                    deviceId = "mac-device"
+                                )
+                                callback?.onMessageReceived(message)
+                            }
+                        }
                     } else {
-                        // 일반 클립보드 데이터 처리
-                        Log.d(TAG, "📝 클립보드 데이터 수신: ${rawContent.take(50)}...")
-                        val cleanContent = rawContent
+                        // JSON이 아닌 경우 - 일반 텍스트 또는 Base64 데이터
+                        Log.d(TAG, "📝 일반 클립보드 데이터 수신: ${rawContent.take(50)}...")
                         
-                        // ClipboardMessage 객체 생성
+                        // PIN 인증 중이면 우선적으로 인증 응답으로 처리
+                        if (isAuthenticating) {
+                            Log.d(TAG, "🔐 PIN 인증 중 - 인증 응답 처리 시도")
+                            Log.d(TAG, "🔍 인증 응답 후보 데이터: $rawContent")
+                            
+                            handleAuthResponse(rawContent)
+                            return
+                        }
+                        
+                        // 일반 클립보드 데이터로 처리
                         val message = ClipboardMessage(
-                            content = cleanContent,
+                            content = rawContent,
                             deviceId = "mac-device"
                         )
                         
-                        Log.d(TAG, "✅✅✅ Mac에서 클립보드 수신 완료: ${cleanContent.take(30)}... ✅✅✅")
+                        Log.d(TAG, "✅✅✅ Mac에서 클립보드 수신 완료: ${rawContent.take(30)}... ✅✅✅")
                         callback?.onMessageReceived(message)
                     }
                     
@@ -326,6 +418,20 @@ class BluetoothService(private val context: Context) {
                 } else {
                     Log.e(TAG, "❌ Mac으로 메시지 전송 실패: status=$status")
                 }
+            }
+        }
+        
+        override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "✅ Descriptor 설정 완료")
+                
+                // Descriptor 쓰기 완료 후 다음 초기화 단계 진행
+                targetCharacteristic?.let { characteristic ->
+                    continueInitialization(gatt, characteristic)
+                }
+            } else {
+                Log.e(TAG, "❌ Descriptor 설정 실패: status=$status")
+                callback?.onError("Notification 설정 실패")
             }
         }
     }
@@ -564,6 +670,7 @@ class BluetoothService(private val context: Context) {
             if (authResponse != null) {
                 if (authResponse.success) {
                     Log.d(TAG, "🎉 PIN 인증 성공!")
+                    isAuthenticating = false // 인증 완료
                     
                     // 세션 토큰 저장
                     authResponse.sessionToken?.let { token ->

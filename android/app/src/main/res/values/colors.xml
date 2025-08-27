@@ -2,7 +2,7 @@
 <resources>
     <!-- 앱 아이콘 배경색 -->
     <!-- 원하는 색상으로 변경하세요 (예: #2196F3, #FF5722, #9C27B0 등) -->
-    <color name="ic_launcher_background">#3DDC84</color>
+    <color name="ic_launcher_background">#FFF3E0</color>
     
     <!-- 다른 색상 옵션들 -->
     <!-- <color name="ic_launcher_background">#2196F3</color> --> <!-- 파란색 -->
